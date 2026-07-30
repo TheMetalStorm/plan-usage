@@ -43,17 +43,17 @@ type Result struct {
 
 // RateLimit is the parsed x-ratelimit-* triplet.
 type RateLimit struct {
-	HasData      bool
-	Source       string // which headers we parsed
-	ReqLimit     int64
-	ReqRemain    int64
-	ReqReset     time.Duration
-	TokLimit     int64
-	TokRemain    int64
-	TokReset     time.Duration
-	Group        string // rate-limit tier label, if present
-	HasRequests  bool
-	HasTokens    bool
+	HasData     bool
+	Source      string // which headers we parsed
+	ReqLimit    int64
+	ReqRemain   int64
+	ReqReset    time.Duration
+	TokLimit    int64
+	TokRemain   int64
+	TokReset    time.Duration
+	Group       string // rate-limit tier label, if present
+	HasRequests bool
+	HasTokens   bool
 }
 
 // Percent returns 0-100, 0 when no limit known.
@@ -210,6 +210,24 @@ func NewPOST(ctx context.Context, url string, headers map[string]string, body []
 	if body == nil {
 		req.Body = http.NoBody
 		req.ContentLength = 0
+	}
+	return req, nil
+}
+
+// NewGET returns a *http.Request with method=GET and the standard probe
+// User-Agent. Used for OAuth-style GETs (e.g. wham/usage) where there's
+// no body.
+func NewGET(ctx context.Context, url string, headers map[string]string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if c := New(); c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	return req, nil
 }

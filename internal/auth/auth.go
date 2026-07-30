@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Credential is a single resolved token ready to feed to a Provider.
@@ -78,6 +79,13 @@ func (f *Finder) ClineConfigPaths() []string {
 func (f *Finder) readFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
 // CodexToken reads ~/.codex/auth.json and extracts the bearer / api_key.
+//
+// Two shapes are supported:
+//
+//  1. Legacy OPENAI_API_KEY at top level — used by codex pre-0.50 or when
+//     the user configured a custom OpenAI key.
+//  2. OAuth: when auth_mode == "chatgpt", the `tokens.access_token` JWT
+//     is the bearer for chatgpt.com/backend-api/wham/usage.
 func (f *Finder) CodexToken() (*Credential, error) {
 	raw, err := f.readFile(f.CodexPath())
 	if err != nil {
@@ -87,12 +95,73 @@ func (f *Finder) CodexToken() (*Credential, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("codex auth: parse: %w", err)
 	}
-	for _, k := range []string{"OPENAI_API_KEY", "api_key", "access_token", "token"} {
+	for _, k := range []string{"OPENAI_API_KEY", "api_key", "token"} {
 		if v, ok := doc[k].(string); ok && v != "" {
 			return &Credential{Token: v, Source: f.CodexPath()}, nil
 		}
 	}
-	return nil, errors.New("codex auth: token field missing")
+	if tokens, ok := doc["tokens"].(map[string]any); ok {
+		for _, k := range []string{"access_token", "id_token", "refresh_token"} {
+			if v, ok := tokens[k].(string); ok && v != "" {
+				return &Credential{
+					Token:  v,
+					Source: f.CodexPath() + " (oauth:" + k + ")",
+				}, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("codex auth: token field missing in %s", f.CodexPath())
+}
+
+// CodexOAuthToken reads ~/.codex/auth.json and returns the ChatGPT OAuth
+// credentials when present. Returns ok=false when the file is missing or
+// the user is not on the chatgpt auth_mode (e.g. legacy OPENAI_API_KEY).
+func (f *Finder) CodexOAuthToken() (access, refresh string, lastRefresh time.Time, ok bool) {
+	raw, err := f.readFile(f.CodexPath())
+	if err != nil {
+		return "", "", time.Time{}, false
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return "", "", time.Time{}, false
+	}
+	if mode, _ := doc["auth_mode"].(string); mode != "chatgpt" {
+		return "", "", time.Time{}, false
+	}
+	tokens, _ := doc["tokens"].(map[string]any)
+	if tokens == nil {
+		return "", "", time.Time{}, false
+	}
+	access, _ = tokens["access_token"].(string)
+	refresh, _ = tokens["refresh_token"].(string)
+	if lr, ok := doc["last_refresh"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, lr); err == nil {
+			lastRefresh = t
+		} else if t, err := time.Parse(time.RFC3339, lr); err == nil {
+			lastRefresh = t
+		}
+	}
+	if access != "" {
+		return access, refresh, lastRefresh, true
+	}
+	return "", "", time.Time{}, false
+}
+
+// CodexAuthMode returns the auth_mode field of ~/.codex/auth.json when
+// present, or "" when the file is missing / unparsable. Callers use this
+// to decide whether to prefer the codex CLI app-server (api-key legacy
+// users) or the OAuth wham/usage path (chatgpt-auth users).
+func (f *Finder) CodexAuthMode() string {
+	raw, err := f.readFile(f.CodexPath())
+	if err != nil {
+		return ""
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return ""
+	}
+	mode, _ := doc["auth_mode"].(string)
+	return mode
 }
 
 // OpenCodeAuth returns the full opencode auth.json (map of provider -> blob).
