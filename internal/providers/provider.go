@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/TheMetalStorm/provider-usage/internal/providers/clinepass"
-	"github.com/TheMetalStorm/provider-usage/internal/providers/codex"
-	"github.com/TheMetalStorm/provider-usage/internal/providers/commandcode"
-	"github.com/TheMetalStorm/provider-usage/internal/providers/freebuff"
-	"github.com/TheMetalStorm/provider-usage/internal/providers/opencodego"
-	"github.com/TheMetalStorm/provider-usage/internal/types"
+	"github.com/TheMetalStorm/plan-usage/internal/providers/clinepass"
+	"github.com/TheMetalStorm/plan-usage/internal/providers/codex"
+	"github.com/TheMetalStorm/plan-usage/internal/providers/commandcode"
+	"github.com/TheMetalStorm/plan-usage/internal/providers/freebuff"
+	"github.com/TheMetalStorm/plan-usage/internal/providers/opencodego"
+	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
 // Builder returns a Provider instance.

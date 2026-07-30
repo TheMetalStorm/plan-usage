@@ -1,13 +1,13 @@
 [Unit]
-Description=provider-usage daemon — multi-provider coding-plan monitor
-Documentation=https://github.com/TheMetalStorm/provider-usage
+Description=plan-usage daemon — multi-provider coding-plan monitor
+Documentation=https://github.com/TheMetalStorm/plan-usage
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 # %h expands to $HOME.  Edit if you installed the binary elsewhere.
-ExecStart=%h/.local/bin/provider-usage daemon
+ExecStart=%h/.local/bin/plan-usage daemon
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal

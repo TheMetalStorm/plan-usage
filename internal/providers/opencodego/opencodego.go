@@ -26,11 +26,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TheMetalStorm/provider-usage/internal/auth"
-	"github.com/TheMetalStorm/provider-usage/internal/config"
-	"github.com/TheMetalStorm/provider-usage/internal/opencodeutil"
-	"github.com/TheMetalStorm/provider-usage/internal/probe"
-	"github.com/TheMetalStorm/provider-usage/internal/types"
+	"github.com/TheMetalStorm/plan-usage/internal/auth"
+	"github.com/TheMetalStorm/plan-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/opencodeutil"
+	"github.com/TheMetalStorm/plan-usage/internal/probe"
+	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
 // Provider implements types.Provider for OpenCode Go.

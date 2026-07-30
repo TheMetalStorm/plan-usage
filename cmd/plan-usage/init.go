@@ -32,32 +32,32 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 
 const polybarSnippet = `; Add this to your polybar config (~/.config/polybar/config.ini):
 
-[module/provider-usage]
+[module/plan-usage]
 type = custom/script
-exec = provider-usage polybar
+exec = plan-usage polybar
 interval = 60
-click-left = provider-usage show
-click-right = provider-usage refresh
+click-left = plan-usage show
+click-right = plan-usage refresh
 format-prefix = " "
 format-foreground = #83a598
 format-underline = #83a598
 label = %output%
 
 ; Then in your bar config:
-;   modules-right = provider-usage volum pulseaudio
+;   modules-right = plan-usage volum pulseaudio
 `
 
-const systemdSnippet = `# Save to ~/.config/systemd/user/provider-usage.service, then:
+const systemdSnippet = `# Save to ~/.config/systemd/user/plan-usage.service, then:
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now provider-usage.service
+#   systemctl --user enable --now plan-usage.service
 #
 [Unit]
-Description=provider-usage daemon — multi-provider coding-plan monitor
+Description=plan-usage daemon — multi-provider coding-plan monitor
 After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/provider-usage daemon
+ExecStart=%h/.local/bin/plan-usage daemon
 Restart=on-failure
 RestartSec=10s
 

@@ -1,4 +1,4 @@
-// Command provider-usage is a multi-provider coding-plan usage monitor with a
+// Command plan-usage is a multi-provider coding-plan usage monitor with a
 // Polybar widget and an interactive TUI dashboard.
 //
 // Global flags (--config, --state-dir, --debug, --dry-run) may appear
@@ -7,14 +7,14 @@
 //
 // Subcommands:
 //
-//	provider-usage show              open the TUI dashboard
-//	provider-usage polybar           one-line widget for polybar
-//	provider-usage daemon            long-running poller (writes state file)
-//	provider-usage check [provider]  dump a single provider's snapshot as JSON
-//	provider-usage refresh           refresh every enabled provider once
-//	provider-usage init polybar      write an example polybar snippet to stdout
-//	provider-usage init system       write a systemd --user unit file to stdout
-//	provider-usage version           print version info
+//	plan-usage show              open the TUI dashboard
+//	plan-usage polybar           one-line widget for polybar
+//	plan-usage daemon            long-running poller (writes state file)
+//	plan-usage check [provider]  dump a single provider's snapshot as JSON
+//	plan-usage refresh           refresh every enabled provider once
+//	plan-usage init polybar      write an example polybar snippet to stdout
+//	plan-usage init system       write a systemd --user unit file to stdout
+//	plan-usage version           print version info
 package main
 
 import (
@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/TheMetalStorm/provider-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/config"
 )
 
 var version = "dev"
@@ -68,7 +68,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runInitStatus(scanned.cmdArgs, stdout, stderr)
 
 	case "version", "-v", "--version":
-		fmt.Fprintln(stdout, "provider-usage", version)
+		fmt.Fprintln(stdout, "plan-usage", version)
 		return 0
 
 	case "help", "-h", "--help":
@@ -197,7 +197,7 @@ func errInt(err error) int {
 }
 
 func usageTo(w io.Writer) {
-	fmt.Fprint(w, `provider-usage — multi-provider coding-plan monitor
+	fmt.Fprint(w, `plan-usage — multi-provider coding-plan monitor
 
 subcommands:
   show           open the interactive TUI dashboard

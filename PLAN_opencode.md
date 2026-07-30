@@ -30,7 +30,7 @@ The `opencode.ai` web app exposes a `/_server` RPC endpoint that returns workspa
 ## Decisions
 
 - Use `modernc.org/sqlite` (pure Go, no CGo) for DB reads.
-- Cookie cache at `~/.local/share/provider-usage/opencode-cookies.json`.
+- Cookie cache at `~/.local/share/plan-usage/opencode-cookies.json`.
 - The `CODEXBAR_OPENCODE_WORKSPACE_ID` env var can set a workspace ID (raw `wrk_…` or full URL).
 - No browser cookie import (Linux). Cookies must be cached via env/config or the cache file.
 - API key from `auth.json` is tried first as a Bearer token on `/_server`; falls back to cookie auth.

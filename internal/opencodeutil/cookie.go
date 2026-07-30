@@ -24,7 +24,7 @@ type CookieCache struct {
 	path string
 }
 
-// NewCookieCache creates a cache rooted at ~/.local/share/provider-usage.
+// NewCookieCache creates a cache rooted at ~/.local/share/plan-usage.
 func NewCookieCache() (*CookieCache, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -32,9 +32,9 @@ func NewCookieCache() (*CookieCache, error) {
 	}
 	dir := os.Getenv("XDG_STATE_HOME")
 	if dir == "" {
-		dir = filepath.Join(home, ".local", "state", "provider-usage")
+		dir = filepath.Join(home, ".local", "state", "plan-usage")
 	} else {
-		dir = filepath.Join(dir, "provider-usage")
+		dir = filepath.Join(dir, "plan-usage")
 	}
 	return &CookieCache{path: filepath.Join(dir, "opencode-cookies.json")}, nil
 }

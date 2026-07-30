@@ -1,4 +1,4 @@
-module github.com/TheMetalStorm/provider-usage
+module github.com/TheMetalStorm/plan-usage
 
 go 1.26.5
 

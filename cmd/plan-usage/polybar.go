@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/TheMetalStorm/provider-usage/internal/config"
-	"github.com/TheMetalStorm/provider-usage/internal/format"
-	"github.com/TheMetalStorm/provider-usage/internal/state"
+	"github.com/TheMetalStorm/plan-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/format"
+	"github.com/TheMetalStorm/plan-usage/internal/state"
 )
 
 // runPolybar prints the compact polybar line.

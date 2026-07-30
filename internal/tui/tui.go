@@ -10,11 +10,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/TheMetalStorm/provider-usage/internal/config"
-	"github.com/TheMetalStorm/provider-usage/internal/debug"
-	"github.com/TheMetalStorm/provider-usage/internal/providers"
-	"github.com/TheMetalStorm/provider-usage/internal/state"
-	"github.com/TheMetalStorm/provider-usage/internal/types"
+	"github.com/TheMetalStorm/plan-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/debug"
+	"github.com/TheMetalStorm/plan-usage/internal/providers"
+	"github.com/TheMetalStorm/plan-usage/internal/state"
+	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
 // Model is the bubbletea root model.
@@ -345,7 +345,7 @@ func keyMatches(k tea.KeyMsg, want ...string) bool {
 
 func (m *Model) renderHeader() string {
 	age := time.Since(m.lastRefresh)
-	title := titleStyle.Render("provider-usage")
+	title := titleStyle.Render("plan-usage")
 	subtitle := subStyle.Render("multi-provider coding-plan monitor")
 	right := subStyle.Render(fmt.Sprintf("⟳ refreshed %s ago", shortDur(age)))
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(subtitle) - lipgloss.Width(right) - 6

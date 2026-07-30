@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/TheMetalStorm/provider-usage/internal/config"
-	"github.com/TheMetalStorm/provider-usage/internal/state"
-	"github.com/TheMetalStorm/provider-usage/internal/tui"
+	"github.com/TheMetalStorm/plan-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/state"
+	"github.com/TheMetalStorm/plan-usage/internal/tui"
 )
 
 // runShow opens the interactive TUI.
