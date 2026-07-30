@@ -75,7 +75,7 @@ Files:
 - Run `go mod tidy`
 - Verify `go build ./...` compiles
 
-(commit 77084ea)
+(commits 77084ea, aec235c)
 
 ## Out of scope
 

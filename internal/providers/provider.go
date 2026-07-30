@@ -10,7 +10,6 @@ import (
 	"github.com/TheMetalStorm/provider-usage/internal/providers/codex"
 	"github.com/TheMetalStorm/provider-usage/internal/providers/commandcode"
 	"github.com/TheMetalStorm/provider-usage/internal/providers/freebuff"
-	"github.com/TheMetalStorm/provider-usage/internal/providers/opencode"
 	"github.com/TheMetalStorm/provider-usage/internal/providers/opencodego"
 	"github.com/TheMetalStorm/provider-usage/internal/types"
 )
@@ -25,7 +24,6 @@ var (
 
 // order defines the canonical iteration order (UI / polybar / daemon).
 var order = []string{
-	"opencode",
 	"opencodego",
 	"codex",
 	"clinepass",
@@ -122,7 +120,6 @@ func EnrichWindows(p types.Provider, snap *types.Snapshot) {
 // time; the order above defines the canonical UI / polybar / daemon
 // iteration sequence.
 func init() {
-	Register("opencode", func() (types.Provider, error) { return opencode.New(), nil })
 	Register("opencodego", func() (types.Provider, error) { return opencodego.New(), nil })
 	Register("codex", func() (types.Provider, error) { return codex.New(), nil })
 	Register("clinepass", func() (types.Provider, error) { return clinepass.New(), nil })

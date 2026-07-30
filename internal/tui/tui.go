@@ -296,8 +296,8 @@ func loadItems(store *state.Store) []types.Snapshot {
 
 func sortByProvider(s []types.Snapshot) {
 	priority := map[string]int{
-		"opencode": 0, "opencodego": 1, "codex": 2,
-		"clinepass": 3, "commandcode": 4, "freebuff": 5,
+		"opencodego": 0, "codex": 1,
+		"clinepass": 2, "commandcode": 3, "freebuff": 4,
 	}
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && priority[s[j-1].Provider] > priority[s[j].Provider]; j-- {
