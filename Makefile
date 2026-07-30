@@ -38,5 +38,8 @@ vet:
 run:
 	$(GO) run $(PKG) show
 
+tray:
+	$(GO) run $(PKG) tray
+
 clean:
 	rm -f $(BINARY)

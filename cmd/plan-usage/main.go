@@ -8,6 +8,7 @@
 // Subcommands:
 //
 //	plan-usage show              open the TUI dashboard
+//	plan-usage tray              run the native system-tray popup
 //	plan-usage polybar           one-line widget for polybar
 //	plan-usage daemon            long-running poller (writes state file)
 //	plan-usage check [provider]  dump a single provider's snapshot as JSON
@@ -51,6 +52,13 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	case "show", "ui", "tui":
 		return errInt(runShow(cfg, scanned.cmdArgs))
+
+	case "tray":
+		if err := runTray(cfg); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 
 	case "polybar":
 		return errInt(runPolybar(cfg))
@@ -201,6 +209,7 @@ func usageTo(w io.Writer) {
 
 subcommands:
   show           open the interactive TUI dashboard
+  tray           run the native system-tray popup
   polybar        one-line polybar output (read from disk)
   daemon         long-running poller, refreshes the state file
   check [name]   dump a single provider snapshot as JSON

@@ -11,7 +11,7 @@ import (
 // (errInt does not print, so no double-printing).
 func runInit(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "init requires a subcommand: polybar | system")
+		fmt.Fprintln(stderr, "init requires a subcommand: polybar | system | tray")
 		return errors.New("init requires a subcommand")
 	}
 	switch args[0] {
@@ -24,8 +24,12 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 		_, _ = stdout.Write([]byte(systemdSnippet + "\n"))
 		return nil
 
+	case "tray":
+		_, _ = stdout.Write([]byte(trayDesktopSnippet + "\n"))
+		return nil
+
 	default:
-		fmt.Fprintf(stderr, "init: unknown subcommand %q (try polybar or system)\n", args[0])
+		fmt.Fprintf(stderr, "init: unknown subcommand %q (try polybar, system, or tray)\n", args[0])
 		return errors.New("unknown init subcommand")
 	}
 }
@@ -45,6 +49,17 @@ label = %output%
 
 ; Then in your bar config:
 ;   modules-right = plan-usage volum pulseaudio
+`
+
+const trayDesktopSnippet = `# Save as ~/.config/autostart/plan-usage-tray.desktop
+[Desktop Entry]
+Type=Application
+Name=plan-usage
+Comment=Multi-provider coding-plan usage monitor
+Exec=%h/.local/bin/plan-usage tray
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
 `
 
 const systemdSnippet = `# Save to ~/.config/systemd/user/plan-usage.service, then:

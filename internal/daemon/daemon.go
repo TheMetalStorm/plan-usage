@@ -36,22 +36,46 @@ func New(cfg *config.Config) (*Daemon, error) {
 	return &Daemon{cfg: cfg, store: store}, nil
 }
 
-// Run executes the main loop until SIGINT / SIGTERM.
+// Refresh runs one provider refresh cycle. It is safe to call from a
+// desktop tray process or another foreground consumer; the caller owns
+// the lifetime of ctx.
+func (d *Daemon) Refresh(ctx context.Context) {
+	d.cycle(ctx)
+}
+
+// Run executes the main loop until SIGINT / SIGTERM. Before each
+// scheduled cycle it reloads the configured refresh interval, so changing
+// refresh_interval from the tray takes effect without restarting systemd.
 func (d *Daemon) Run() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	tick := time.NewTicker(d.cfg.RefreshEvery)
-	defer tick.Stop()
-
-	d.cycle(ctx)
+	d.Refresh(ctx)
 	for {
+		timer := time.NewTimer(d.cfg.RefreshEvery)
 		select {
-		case <-tick.C:
-			d.cycle(ctx)
+		case <-timer.C:
+			d.reloadRefreshInterval()
+			d.Refresh(ctx)
 		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return
 		}
+	}
+}
+
+func (d *Daemon) reloadRefreshInterval() {
+	if d.cfg.ConfigPath == "" {
+		return
+	}
+	fresh, err := config.Load(d.cfg.ConfigPath)
+	if err == nil && fresh.RefreshEvery >= 5*time.Second {
+		d.cfg.RefreshEvery = fresh.RefreshEvery
 	}
 }
 
