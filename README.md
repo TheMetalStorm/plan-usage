@@ -1,5 +1,8 @@
 # provider-usage
 
+> **⚠️ WIP — This project is under active development and does not work yet.
+> Everything is a stub. Do not rely on it for anything.**
+
 > Multi-provider coding-plan usage monitor — keep an eye on OpenCode,
 > Codex / ChatGPT, ClinePass, CommandCode and Freebuff right from your
 > Polybar bar. Click for a TUI dashboard.
