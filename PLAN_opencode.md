@@ -1,6 +1,6 @@
 # Plan: Fix OpenCode Zen + Go providers
 
-**Status:** ✅ plan approved, implementation complete
+**Status:** ✅ plan approved, implementation complete (+ UI nav improvements ✅)
 
 ## Problem
 
@@ -76,6 +76,16 @@ Files:
 - Verify `go build ./...` compiles
 
 (commits 77084ea, aec235c)
+
+---
+
+### Part 5 — TUI navigation: up/down + clickable provider names   ✅
+
+- Replace left/right arrow + h/l navigation with up/down arrow + k/j
+- Add mouse click handler: clicking a provider name in the left panel selects it
+- Add mouse wheel support (wheel up/down navigates providers)
+- Update footer keybinding hints
+- File: `internal/tui/tui.go`
 
 ## Out of scope
 
