@@ -75,6 +75,24 @@ func (f *Finder) ClineConfigPaths() []string {
 	}
 }
 
+// ClineCLIProvidersPaths -- candidate paths for the standalone CLINE CLI's
+// providers.json file (written with 0600 perms by the Cline team). The
+// first entry honours $CLINE_DATA_DIR; the rest mirror the XDG-aware
+// candidates we use for the legacy flat-JSON configs so users on either
+// ~/.cline or ~/.config/cline installs are both detected.
+func (f *Finder) ClineCLIProvidersPaths() []string {
+	paths := []string{}
+	if d := strings.TrimSpace(os.Getenv("CLINE_DATA_DIR")); d != "" {
+		paths = append(paths, filepath.Join(d, "settings", "providers.json"))
+	}
+	paths = append(paths,
+		filepath.Join(f.Home, ".cline", "data", "settings", "providers.json"),
+		filepath.Join(f.Data, "cline", "data", "settings", "providers.json"),
+		filepath.Join(f.XDG, "cline", "data", "settings", "providers.json"),
+	)
+	return paths
+}
+
 // readFile returns os.ReadFile wrapped for symmetry.
 func (f *Finder) readFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
@@ -217,8 +235,24 @@ func (f *Finder) FreebuffCredentials() (*Credential, error) {
 	return &Credential{Token: doc.AuthToken, Source: f.FreebuffCredentialsPath()}, nil
 }
 
-// ClinePassCredentials scans candidate cline config paths for an api key.
+// ClinePassCredentials locates a Cline Pass bearer token by checking, in
+// order:
+//
+//  1. The $CLINE_API_KEY environment variable (developer convenience, mirrors
+//     the CommandCode / Freebuff convention).
+//  2. The standalone CLINE CLI's providers.json file, written with 0600
+//     permissions under $CLINE_DATA_DIR/settings/providers.json (default:
+//     ~/.cline/data/settings/providers.json). The CLI stores a map of
+//     provider-name -> { apiKey | accessToken | token, expiresAt? }.
+//  3. The legacy "VS Code extension + flat JSON" paths handled by
+//     clineScan() so users on older setups keep working.
 func (f *Finder) ClinePassCredentials() (*Credential, error) {
+	if env := strings.TrimSpace(os.Getenv("CLINE_API_KEY")); env != "" {
+		return &Credential{Token: env, Source: "env:CLINE_API_KEY"}, nil
+	}
+	if cred, ok := f.scanClineCLIProviders(); ok {
+		return cred, nil
+	}
 	for _, p := range f.ClineConfigPaths() {
 		raw, err := f.readFile(p)
 		if err != nil {
@@ -228,7 +262,171 @@ func (f *Finder) ClinePassCredentials() (*Credential, error) {
 			return cred, nil
 		}
 	}
-	return nil, errors.New("cline pass: no credentials found in any candidate path")
+	return nil, errors.New("cline pass: no credentials found in env, the standalone CLINE CLI (run `cline auth` / `cline login`), or any legacy VS Code / ~/.cline config path")
+}
+
+// clineProviderKeys are the providers.json entries we treat as the
+// "Cline Pass" subscription. The Cline CLI has shipped a few spellings;
+// we try all of them but the runtime order is driven by the top-level
+// `lastUsedProvider` field when it identifies a recognised provider.
+var clineProviderKeys = []string{
+	"cline-pass",
+	"clinePass",
+	"cline_pass",
+	"cline",
+}
+
+// clineCLIProvidersDoc mirrors the shape the standalone Cline CLI v3.x
+// writes to providers.json (deeply nested:
+//
+//	providers.<key>.settings.auth.{accessToken, refreshToken, expiresAt}
+//	providers.<key>.settings.model
+//	lastUsedProvider
+//
+// Older CLINE-CLI versions wrote a flat shape with apiKey/token at the
+// top level; those are still handled by clineScan() in the legacy
+// fallback chain. The two parsers are non-overlapping by design.
+type clineCLIProvidersDoc struct {
+	Version          int                              `json:"version"`
+	LastUsedProvider string                           `json:"lastUsedProvider"`
+	Providers        map[string]clineCLIProviderEntry `json:"providers"`
+}
+
+type clineCLIProviderEntry struct {
+	Settings    clineCLISettings `json:"settings"`
+	TokenSource string           `json:"tokenSource"`
+	UpdatedAt   string           `json:"updatedAt"`
+}
+
+type clineCLISettings struct {
+	Provider string       `json:"provider"`
+	Auth     clineCLIAuth `json:"auth"`
+	Model    string       `json:"model"`
+}
+
+// clineCLIAuth is the auth block inside one provider entry.
+//
+// NB: the accessToken here is a WorkOS session JWT (prefix "workos:...")
+// and is NOT directly accepted as a Bearer against api.cline.bot/api/v1/.
+// We still surface it so callers can recognise the user as signed-in,
+// but the provider layer is responsible for not blindly forwarding it to
+// /api/v1/chat/completions -- that needs a separate Cline Pass API key.
+type clineCLIAuth struct {
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	// expiresAt arrived as a Unix-millis NUMBER in CLI v3.x but as an
+	// RFC3339 string in v2.x. Use json.RawMessage and accept both in
+	// parseClineExpiry so neither shape silently maps to "never expires".
+	ExpiresAt json.RawMessage `json:"expiresAt"`
+	AccountID string          `json:"accountId"`
+}
+
+// scanClineCLIProviders walks every candidate providers.json path and
+// returns the first matching entry whose OAuth access token is still
+// unexpired. Returns ok=false when no file exists / parses, or when no
+// entry has a usable token -- callers fall through to the legacy
+// clineScan() chain for older / flat-shape config files.
+func (f *Finder) scanClineCLIProviders() (*Credential, bool) {
+	for _, path := range f.ClineCLIProvidersPaths() {
+		raw, err := f.readFile(path)
+		if err != nil {
+			continue
+		}
+		var doc clineCLIProvidersDoc
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			continue
+		}
+		for _, key := range orderedClineProviderKeys(doc.LastUsedProvider) {
+			entry, ok := doc.Providers[key]
+			if !ok {
+				continue
+			}
+			cred, ok := clineAuthToCredential(entry.Settings.Auth, path+" (#"+key+")")
+			if ok {
+				return cred, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// orderedClineProviderKeys returns the priority list of provider keys to
+// probe: the top-level lastUsedProvider first (when it's one we
+// recognise), then the rest in our static fallback order.
+func orderedClineProviderKeys(lastUsed string) []string {
+	out := make([]string, 0, len(clineProviderKeys)+1)
+	if lastUsed != "" {
+		for _, k := range clineProviderKeys {
+			if k == lastUsed {
+				out = append(out, k)
+				break
+			}
+		}
+	}
+	for _, k := range clineProviderKeys {
+		seen := false
+		for _, e := range out {
+			if e == k {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// clineAuthToCredential lifts the OAuth accessToken out of one provider
+// entry into our Credential shape. An empty accessToken or a stale
+// expiresAt (timestamp earlier than now) returns false so the caller
+// keeps scanning; the Cline CLI refreshes these on `cline auth` / at
+// next launch.
+func clineAuthToCredential(a clineCLIAuth, src string) (*Credential, bool) {
+	if strings.TrimSpace(a.AccessToken) == "" {
+		return nil, false
+	}
+	if len(a.ExpiresAt) > 0 {
+		if t, ok := parseClineExpiry(a.ExpiresAt); ok {
+			if t.Before(time.Now()) {
+				return nil, false
+			}
+			src = src + ", expiresAt=" + string(a.ExpiresAt)
+		}
+	}
+	return &Credential{Token: a.AccessToken, Source: src}, true
+}
+
+// parseClineExpiry accepts a JSON-encoded value. It supports:
+//   - numeric Unix millis (>= 1e12), what CLI v3 writes;
+//   - numeric Unix seconds (< 1e12), older epochs;
+//   - RFC3339 / RFC3339Nano strings, what CLI v2 wrote.
+//
+// Returns (time.Time{}, false) on empty or unparseable input.
+func parseClineExpiry(raw json.RawMessage) (time.Time, bool) {
+	if len(raw) == 0 {
+		return time.Time{}, false
+	}
+	var n int64
+	if err := json.Unmarshal(raw, &n); err == nil {
+		if n <= 0 {
+			return time.Time{}, false
+		}
+		if n >= 1_000_000_000_000 {
+			return time.UnixMilli(n), true
+		}
+		return time.Unix(n, 0), true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+			if t, err := time.Parse(layout, s); err == nil {
+				return t, true
+			}
+		}
+	}
+	return time.Time{}, false
 }
 
 // clineScan extracts an api key from a Cline config blob. Cline has evolved
