@@ -146,13 +146,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// panelWidths returns the total rendered widths assigned to the list and
+// detail panels. Keeping this in one place prevents renderers from measuring
+// themselves against a different layout than View actually renders.
+func (m *Model) panelWidths() (listW, detailW int) {
+	if m.debug && m.width >= 120 {
+		each := m.width / 4
+		return each, each
+	}
+
+	listW = m.width / 3
+	if listW < 22 {
+		listW = 22
+	}
+	detailW = m.width - listW
+	if detailW < 18 {
+		detailW = 18
+	}
+	return listW, detailW
+}
+
 // handleMouse processes mouse events for the TUI.
 func (m *Model) handleMouse(mm tea.MouseMsg) tea.Cmd {
-	// Calculate the left panel width using the same logic as View()
-	listW := m.width / 4
-	if listW < 18 {
-		listW = 18
-	}
+	listW, _ := m.panelWidths()
 
 	switch mm.Type {
 	case tea.MouseLeft:
@@ -198,17 +214,18 @@ func (m *Model) View() string {
 	footer := m.renderFooter()
 	var body string
 	if useDebugColumns {
+		each := m.width / 4
 		cols := []string{
-			panel(m.renderList(), m.width/4),
-			panel(m.renderDetail(), m.width/4),
-			panel(m.renderLog(), m.width/4),
+			panel(m.renderList(each), each),
+			panel(m.renderDetail(each), each),
+			panel(m.renderLog(), each),
 		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	} else {
-		listW := panelWidth(m.width / 4)
+		listW, detailW := m.panelWidths()
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			panel(m.renderList(), listW),
-			panel(m.renderDetail(), m.width-listW),
+			panel(m.renderList(listW), listW),
+			panel(m.renderDetail(detailW), detailW),
 		)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -398,34 +415,71 @@ func (m *Model) renderHeader() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, title, " ", subtitle, strings.Repeat(" ", gap), right)
 }
 
-func (m *Model) renderList() string {
+func (m *Model) renderList(panelW int) string {
 	var b strings.Builder
 	b.WriteString(listHeaderStyle.Render("PROVIDERS"))
 	b.WriteString("\n")
+
+	// Available content width inside the list panel:
+	//   panel(colW) uses Width(colW - 2) before borders, and the style
+	//   has Padding(0,1) = 2 cols padding + 2 cols border.
+	//   So the visible content area = colW - 4.
+	contentW := panelContentWidth(panelW)
+	if contentW < 8 {
+		contentW = 8
+	}
+
+	// First pass: find the widest badge so we can use a single fixed name
+	// width for all rows. This ensures badges start at the same column
+	// regardless of how wide each badge is.
+	maxBadgeW := 0
+	type rowBadge struct {
+		str string
+		col lipgloss.Color
+	}
+	badges := make([]rowBadge, len(m.items))
+	for i, s := range m.items {
+		badge, col := statusBadge(s)
+		badgeStr := lipgloss.NewStyle().Foreground(col).Render(badge)
+		badges[i] = rowBadge{badgeStr, col}
+		if bw := lipgloss.Width(badgeStr); bw > maxBadgeW {
+			maxBadgeW = bw
+		}
+	}
+
+	// Fixed name column width — same for every row
+	fixedNameW := contentW - 2 - 1 - maxBadgeW
+	if fixedNameW < 4 {
+		fixedNameW = 4
+	}
+	nameStyle := lipgloss.NewStyle().Width(fixedNameW).MaxWidth(fixedNameW)
+
 	for i, s := range m.items {
 		cursor := "  "
 		if i == m.selected {
 			cursor = "▸ "
 		}
-		badge, col := statusBadge(s)
-		name := s.DisplayName
-		if len(name) > 14 {
-			name = name[:14]
-		}
-		inline := fmt.Sprintf("%s%-14s %s", cursor, name, lipgloss.NewStyle().Foreground(col).Render(badge))
+
+		// Truncate display name to fixedNameW (display-width aware)
+		name := truncateDisplay(s.DisplayName, fixedNameW)
+
+		// Render the fixed-width name column; every row gets the same width
+		nameRendered := nameStyle.Render(name)
+
+		row := cursor + nameRendered + " " + badges[i].str
 		if i == m.selected {
-			inline = selectedStyle.Render(inline)
+			row = selectedStyle.Render(row)
 		}
-		b.WriteString(inline)
+		b.WriteString(row)
 		b.WriteString("\n")
 		if _, busy := m.pending[s.Provider]; busy {
-			b.WriteString(subStyle.Render("   ⟳ probing…\n"))
+			writeStyledLine(&b, subStyle, "   ⟳ probing…")
 		} else if !s.RefreshedAt.IsZero() {
-			b.WriteString(subStyle.Render(fmt.Sprintf("   %s ago\n", shortDur(time.Since(s.RefreshedAt)))))
+			writeStyledLine(&b, subStyle, fmt.Sprintf("   %s ago", shortDur(time.Since(s.RefreshedAt))))
 		}
 	}
 	if len(m.items) == 0 {
-		b.WriteString(subStyle.Render("  (no providers)\n"))
+		writeStyledLine(&b, subStyle, "  (no providers)")
 	}
 	return b.String()
 }
@@ -456,7 +510,7 @@ func statusBadge(s types.Snapshot) (string, lipgloss.Color) {
 	return fmt.Sprintf("● %.0f%%", winnerPct), green
 }
 
-func (m *Model) renderDetail() string {
+func (m *Model) renderDetail(panelW int) string {
 	if len(m.items) == 0 || m.selected >= len(m.items) {
 		return "no provider\n"
 	}
@@ -473,26 +527,92 @@ func (m *Model) renderDetail() string {
 		b.WriteString(wrap(s.Err, 60))
 		b.WriteString("\n")
 	default:
+		detailW := panelContentWidth(panelW)
+
 		if len(s.Windows) > 1 {
+			// Pre-scan window labels for alignment
+			maxLabelW := 0
+			for _, w := range s.Windows {
+				lw := lipgloss.Width(empty(w.WindowLabel))
+				if lw > maxLabelW {
+					maxLabelW = lw
+				}
+			}
+
+			usages := make([]string, len(s.Windows))
+			maxUsageW := 0
+			for i := range s.Windows {
+				usages[i] = fmt.Sprintf("%s / %s", humanFormat(&s.Windows[i]), humanTotal(&s.Windows[i]))
+				if uw := lipgloss.Width(usages[i]); uw > maxUsageW {
+					maxUsageW = uw
+				}
+			}
+
+			// Keep label, bar, and percentage columns together. Usage details
+			// stay inline only when the actual panel is wide enough; otherwise
+			// they move to a continuation line instead of forcing the row to wrap.
+			const pctW = 5
+			const rowPrefixW = 2 + 1 + 1 + 2 + pctW + 2 // margins/separators
+			barW := detailW - rowPrefixW - maxLabelW - maxUsageW
+			barW = max(barW, 4)
+			barW = min(barW, 24)
+			inlineUsage := detailW >= rowPrefixW+maxLabelW+barW+maxUsageW
+
 			b.WriteString(sectionStyle.Render("Multi-window plan"))
 			b.WriteString("\n")
-			for _, w := range s.Windows {
-				b.WriteString(fmt.Sprintf("  %-7s ", empty(w.WindowLabel)))
-				b.WriteString(progressBar(w.Percent(), 24))
-				b.WriteString(fmt.Sprintf("  %.0f%%  %s / %s\n",
-					w.Percent(), humanFormat(&w), humanTotal(&w)))
+			for i, w := range s.Windows {
+				// Fixed-width columns: label (maxLabelW), bar (1+barW), pct (5)
+				label := lipgloss.NewStyle().Width(maxLabelW).Render(empty(w.WindowLabel))
+				bar := progressBar(w.Percent(), barW)
+				pct := fmt.Sprintf("%5s", fmt.Sprintf("%.0f%%", w.Percent()))
+				if inlineUsage {
+					b.WriteString(fmt.Sprintf("  %s %s  %s  %s\n", label, bar, pct, usages[i]))
+				} else {
+					row := fmt.Sprintf("  %s %s  %s\n", label, bar, pct)
+					b.WriteString(row)
+					writeStyledLine(&b, subStyle, "    "+truncateDisplay(usages[i], detailW-4))
+				}
+
 				if w.Note != "" {
-					b.WriteString(subStyle.Render("             " + w.Note + "\n"))
+					// Note follows the fixed label/bar/percentage columns.
+					noteIndent := 2 + maxLabelW + 1 + 1 + barW + 2 + pctW + 2
+					if noteIndent > detailW-4 {
+						noteIndent = max(detailW-4, 2)
+					}
+					note := truncateDisplay(w.Note, detailW-noteIndent)
+					writeStyledLine(&b, subStyle, strings.Repeat(" ", noteIndent)+note)
 				}
 			}
 		} else if s.Usage != nil {
 			u := s.Usage
-			b.WriteString(progressBar(u.Percent(), 32))
+
+			// Bar + percentage line
+			barW := detailW - 9 // leave room for "  " + pct(≈5) = 9 cols
+			barW = max(barW, 4)
+			barW = min(barW, 32)
+			b.WriteString(progressBar(u.Percent(), barW))
 			b.WriteString(fmt.Sprintf("  %.0f%%\n\n", u.Percent()))
-			b.WriteString(fmt.Sprintf("  used       %s\n", humanFormat(u)))
-			b.WriteString(fmt.Sprintf("  total      %s\n", humanTotal(u)))
-			b.WriteString(fmt.Sprintf("  window     %s\n", empty(u.WindowLabel)))
-			b.WriteString(fmt.Sprintf("  resets     %s\n", humanReset(u)))
+
+			// Key-value pairs. Labels are padded so values align at column 13,
+			// chosen to fit all current keys + "refreshed" (9 chars).
+			// "  " + key + padding → column 13.
+			const valueCol = 13
+			for _, kv := range []struct {
+				label string
+				value string
+			}{
+				{"used", humanFormat(u)},
+				{"total", humanTotal(u)},
+				{"window", empty(u.WindowLabel)},
+				{"resets", humanReset(u)},
+			} {
+				padding := valueCol - 2 - lipgloss.Width(kv.label)
+				if padding < 1 {
+					padding = 1
+				}
+				b.WriteString(fmt.Sprintf("  %s%s%s\n", kv.label, strings.Repeat(" ", padding), kv.value))
+			}
+
 			if u.Note != "" {
 				b.WriteString("\n")
 				b.WriteString(subStyle.Render("  note: " + u.Note))
@@ -543,7 +663,7 @@ func (m *Model) renderLog() string {
 			col = green
 		}
 		line := fmt.Sprintf("%s %-12s %s\n", ts, e.Provider, e.Msg)
-		b.WriteString(lipgloss.NewStyle().Foreground(col).Render(line))
+		writeStyledLine(&b, lipgloss.NewStyle().Foreground(col), strings.TrimSuffix(line, "\n"))
 	}
 	return b.String()
 }
@@ -581,6 +701,19 @@ func panel(content string, width int) string {
 
 func panelWidth(width int) int {
 	return max(width, 18)
+}
+
+// panelContentWidth returns the width available to content inside a panel.
+// panel() reserves two border cells and two padding cells.
+func panelContentWidth(width int) int {
+	return max(panelWidth(width)-4, 4)
+}
+
+// writeStyledLine avoids Lip Gloss padding the empty line after a trailing
+// newline. Rendering the newline separately keeps the next row at column 0.
+func writeStyledLine(b *strings.Builder, style lipgloss.Style, line string) {
+	b.WriteString(style.Render(line))
+	b.WriteByte('\n')
 }
 
 // ---------- formatting helpers ----------
@@ -680,6 +813,26 @@ func empty(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// truncateDisplay limits a plain string to terminal cells and adds an
+// ellipsis when possible. Unlike slicing bytes or runes, this accounts for
+// wide terminal characters.
+func truncateDisplay(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	runes := []rune(s)
+	for len(runes) > 0 && lipgloss.Width(string(runes)+"…") > width {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "…"
 }
 
 func wrap(s string, width int) string {
