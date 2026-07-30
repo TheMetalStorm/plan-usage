@@ -9,10 +9,14 @@
 // It also satisfies providers.MultiWindowProvider so the TUI can show
 // three progress bars side by side.
 //
-// OpenCode currently exposes NO public billing API endpoint, so we
-// surface the static plan limits and a plain-English note telling the
-// user where to consult the live numbers (opencode.ai/auth).  When
-// OpenCode ships a billing endpoint, only this file needs to change.
+// Strategy:
+//  1. Read local opencode.db SQLite database for per-session cost/token
+//     data. This gives us real Used $ figures for each window.
+//  2. Optionally hit the opencode.ai /_server RPC endpoint for server-
+//     side rolling/weekly/monthly percentages, which overlay the local
+//     snapshot when a session cookie is available.
+//  3. The local monthly window is anchored at the earliest local cost
+//     row and can drift from the real billing cycle.
 package opencodego
 
 import (
@@ -24,15 +28,18 @@ import (
 
 	"github.com/TheMetalStorm/provider-usage/internal/auth"
 	"github.com/TheMetalStorm/provider-usage/internal/config"
+	"github.com/TheMetalStorm/provider-usage/internal/opencodeutil"
 	"github.com/TheMetalStorm/provider-usage/internal/probe"
 	"github.com/TheMetalStorm/provider-usage/internal/types"
 )
 
 // Provider implements types.Provider for OpenCode Go.
 type Provider struct {
-	a     *auth.Finder
-	probe *probe.Client
-	cfg   *config.Config
+	a      *auth.Finder
+	cfg    *config.Config
+	apiKey string // resolved Bearer token
+	db     *opencodeutil.OpenCodeDB
+	probe  *probe.Client
 }
 
 // New returns a Provider with probe initialized.
@@ -61,7 +68,8 @@ var opencodegoFreeModels = []types.FreeModel{
 
 func (p *Provider) AvailableModels() []types.FreeModel { return opencodegoFreeModels }
 
-// IsConfigured: auth.json has an `opencode-go` entry with a key.
+// IsConfigured: auth.json has an `opencode-go` entry with a key, OR
+// we have a local opencode.db with cost data.
 func (p *Provider) IsConfigured() error {
 	a := p.a
 	if a == nil {
@@ -72,112 +80,216 @@ func (p *Provider) IsConfigured() error {
 		}
 		p.a = a
 	}
+
+	// Check config override first.
 	if p.cfg != nil {
 		if k, _, _, ok := p.cfg.Override("opencodego"); ok && k != "" {
+			p.apiKey = k
 			return nil
 		}
 	}
+
+	// Try auth.json for opencode-go key.
 	tokens, src, err := a.OpenCodeAuth()
-	if err != nil {
-		return fmt.Errorf("opencodego: no auth.json: %w (looked at %s)", err, src)
-	}
-	raw, ok := tokens["opencode-go"]
-	if !ok || len(raw) == 0 {
-		return errors.New("opencodego: auth.json has no `opencode-go` entry; see opencode.ai/docs/go to subscribe")
-	}
-	var entry struct {
-		Type string `json:"type"`
-		Key  string `json:"key"`
-	}
-	if err := json.Unmarshal(raw, &entry); err != nil || entry.Key == "" {
-		return errors.New("opencodego: `opencode-go` entry is missing the api key field")
-	}
-	return nil
-}
-
-// defaultUsage is the canonical Go plan scaffold returned when no live
-// data is available.  These are the published limits as of opencode.ai/docs/go.
-func defaultPrimary() types.UsageStats {
-	return types.UsageStats{
-		Used:         0,
-		Total:        12,
-		Unit:         types.UnitUSD,
-		WindowLabel:  "5h",
-		Note:         "static — check opencode.ai/auth for live numbers",
-		LastProbeAt: time.Now(),
-	}
-}
-
-// FetchUsage returns the primary window (5h) with a static default;
-// the snap.Windows is populated separately by SnapshotWindows().
-func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
-	a := p.a
-	if a == nil {
-		var err error
-		a, err = auth.NewFinder()
-		if err != nil {
-			return nil, err
+	if err == nil {
+		raw, ok := tokens["opencode-go"]
+		if ok && len(raw) > 0 {
+			var entry struct {
+				Type string `json:"type"`
+				Key  string `json:"key"`
+			}
+			if json.Unmarshal(raw, &entry) == nil && entry.Key != "" {
+				p.apiKey = entry.Key
+				return nil
+			}
+			return errors.New("opencodego: `opencode-go` entry is missing the key field")
 		}
-		p.a = a
-	}
-	tokens, _, err := a.OpenCodeAuth()
-	if err != nil {
-		stats := defaultPrimary()
-		stats.Error = err.Error()
-		return &stats, nil
-	}
-	raw, ok := tokens["opencode-go"]
-	if !ok {
-		stats := defaultPrimary()
-		stats.Error = "no `opencode-go` entry in auth.json"
-		return &stats, nil
-	}
-	var entry struct {
-		Type string `json:"type"`
-		Key  string `json:"key"`
-	}
-	_ = json.Unmarshal(raw, &entry)
-
-	stats := defaultPrimary()
-	if entry.Key == "" {
-		stats.Error = "opencode-go token missing the `key` field"
-		return &stats, nil
 	}
 
-	// Best-effort: try OpenCode's billing endpoint. Today it returns 404
-	// (no public billing API yet); surface real network errors but stay
-	// quiet on the expected-404 so the UI note stays user-friendly.
-	req, _ := probe.NewPOST(ctx, "https://opencode.ai/api/v1/go/usage", map[string]string{
-		"Authorization": "Bearer " + entry.Key,
-	}, probe.NewChatBody("opencode-big-pickle", 1))
-	res, perr := p.probe.Do(ctx, req)
-	switch {
-	case perr != nil && res == nil:
-		stats.Note = fmt.Sprintf("probe failed: %s", perr.Error())
-	case res != nil && res.Status == 404:
-		// expected — see opencode.ai/auth for live numbers
-	case res != nil && res.Status >= 400:
-		stats.Note = fmt.Sprintf("static (HTTP %d from opencode.ai/api/v1/go/usage)", res.Status)
+	// Still consider configured if we can read the local DB without API key.
+	db, dbErr := opencodeutil.OpenDB()
+	if dbErr == nil && db != nil {
+		p.db = db
+		return nil
 	}
-	return &stats, nil
+
+	return fmt.Errorf("opencodego: no auth.json entry for opencode-go (looked at %s) and cannot read local DB: %v", src, dbErr)
 }
 
-// SnapshotWindows returns the three Go-plan windows. The first entry is
-// the "primary" window (5h) that the TUI's compact view summarizes.
-// All windows default to used=0 because OpenCode does not expose a
-// billing endpoint as of writing.
+// FetchUsage returns the primary window (5h) with data from local DB
+// and optionally the _server endpoint for percentage overlay.
+func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
+	// Ensure auth / DB are resolved.
+	if p.apiKey == "" && p.db == nil {
+		_ = p.IsConfigured()
+	}
+
+	now := time.Now()
+
+	// Compute local cost for 5h window.
+	cost5h := p.costSince(now.Add(-5 * time.Hour))
+
+	// Try server-side overlay for percentage if we have auth.
+	var serverPct5h float64 = -1
+	serverReset5h := time.Duration(0)
+	serverData, err := p.fetchServerUsage(ctx)
+	if err == nil && serverData != nil && serverData.RollingPercent > 0 {
+		serverPct5h = serverData.RollingPercent
+		serverReset5h = time.Duration(serverData.RollingReset) * time.Second
+	}
+
+	// Build primary window: use server percentage if available,
+	// otherwise show local dollar cost.
+	stats := &types.UsageStats{
+		Used:        cost5h,
+		Total:       12.0,
+		Unit:        types.UnitUSD,
+		WindowLabel: "5h",
+		ResetIn:     serverReset5h,
+		ResetAt:     now.Add(serverReset5h),
+		LastProbeAt: now,
+		Note:        "local DB costs — check opencode.ai for live numbers",
+	}
+
+	if serverPct5h >= 0 {
+		stats.Used = serverPct5h
+		stats.Total = 100.0
+		stats.Unit = types.UnitCount
+		stats.WindowLabel = "5h rolling"
+		stats.Note = "server usage overlaid on local costs"
+	}
+
+	return stats, nil
+}
+
+// SnapshotWindows returns the three Go-plan windows with data from
+// the local opencode.db. The first entry is the "primary" window (5h)
+// that the TUI's compact view summarizes.
 func (p *Provider) SnapshotWindows() []types.UsageStats {
+	now := time.Now()
+
+	// Plan limits.
+	const (
+		limit5h     = 12.0
+		limitWeekly = 30.0
+		limitMonth  = 60.0
+	)
+
+	// Compute local costs for each window.
+	cost5h := p.costSince(now.Add(-5 * time.Hour))
+	costWeekly := p.costSince(weekStart(now))
+	costMonth := p.costSince(monthStart(now))
+
+	// Monthly history note.
+	historyNote := p.dailyHistoryNote(14)
+
 	return []types.UsageStats{
-		{Used: 0, Total: 12, Unit: types.UnitUSD, WindowLabel: "5h", Note: "rolling"},
-		{Used: 0, Total: 30, Unit: types.UnitUSD, WindowLabel: "weekly", Note: "Sun reset"},
-		{Used: 0, Total: 60, Unit: types.UnitUSD, WindowLabel: "monthly", Note: "1st reset"},
+		{
+			Used:         cost5h,
+			Total:        limit5h,
+			Unit:         types.UnitUSD,
+			WindowLabel:  "5h",
+			Note:         "local costs, last 5 hours",
+			LastProbeAt:  now,
+		},
+		{
+			Used:         costWeekly,
+			Total:        limitWeekly,
+			Unit:         types.UnitUSD,
+			WindowLabel:  "weekly",
+			Note:         "local costs since Sunday",
+			LastProbeAt:  now,
+		},
+		{
+			Used:         costMonth,
+			Total:        limitMonth,
+			Unit:         types.UnitUSD,
+			WindowLabel:  "monthly",
+			Note:         historyNote,
+			LastProbeAt:  now,
+		},
 	}
 }
 
-// Compile-time check that Provider exposes the SnapshotWindows method.
-// The providers.MultiWindowProvider interface itself lives in the
-// parent package and can't be imported here without creating a cycle,
-// so we verify the method signature structurally.
+// -- helpers --
+
+// costSince returns total cost from local DB since a given time.
+func (p *Provider) costSince(since time.Time) float64 {
+	if p.db == nil {
+		return 0
+	}
+	cost, err := p.db.TotalCostSince(since.UnixMilli())
+	if err != nil {
+		return 0
+	}
+	return cost
+}
+
+// dailyHistoryNote returns a compact summary of recent daily costs.
+func (p *Provider) dailyHistoryNote(days int) string {
+	if p.db == nil {
+		return "local costs since 1st"
+	}
+	history, err := p.db.DailyCostHistory(days)
+	if err != nil || len(history) == 0 {
+		return "local costs since 1st"
+	}
+	total := 0.0
+	for _, d := range history {
+		total += d.Cost
+	}
+	return fmt.Sprintf("local costs since 1st (last %d days: $%.2f, %d sessions)", len(history), total, history[0].Sessions)
+}
+
+// fetchServerUsage tries the _server endpoint for overlay data.
+func (p *Provider) fetchServerUsage(ctx context.Context) (*opencodeutil.ServerUsage, error) {
+	if p.apiKey == "" && !p.haveCookie() {
+		return nil, errors.New("no auth available for server query")
+	}
+	client := opencodeutil.NewServerClient(p.apiKey)
+	if cc, err := opencodeutil.NewCookieCache(); err == nil {
+		client.SetCookieCache(cc)
+	}
+	workspaceID := opencodeutil.ResolveWorkspaceID(p.cfgWorkspaceOverride())
+	return client.FetchUsage(ctx, workspaceID)
+}
+
+// haveCookie checks if a cookie cache exists with a valid cookie.
+func (p *Provider) haveCookie() bool {
+	cc, err := opencodeutil.NewCookieCache()
+	if err != nil {
+		return false
+	}
+	return cc.Cookie() != ""
+}
+
+// cfgWorkspaceOverride checks the user's config for a workspace override.
+func (p *Provider) cfgWorkspaceOverride() string {
+	if p.cfg == nil {
+		return ""
+	}
+	if pc, ok := p.cfg.Providers["opencodego"]; ok {
+		if pc.Endpoint != "" {
+			return pc.Endpoint
+		}
+	}
+	return ""
+}
+
+// weekStart returns the start of the current week (Sunday 00:00 local).
+func weekStart(t time.Time) time.Time {
+	daysSinceSunday := int(t.Weekday()) // 0=Sun, 1=Mon, ...
+	y, m, d := t.AddDate(0, 0, -daysSinceSunday).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
+}
+
+// monthStart returns the start of the current month.
+func monthStart(t time.Time) time.Time {
+	y, m, _ := t.Date()
+	return time.Date(y, m, 1, 0, 0, 0, 0, t.Location())
+}
+
+// Compile-time check for SnapshotWindows method.
 var _ interface {
 	SnapshotWindows() []types.UsageStats
 } = (*Provider)(nil)
