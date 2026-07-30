@@ -44,7 +44,7 @@ format-underline = #83a598
 label = %output%
 
 ; Then in your bar config:
-;   modules-right = usage volum pulseaudio
+;   modules-right = provider-usage volum pulseaudio
 `
 
 const systemdSnippet = `# Save to ~/.config/systemd/user/provider-usage.service, then:
