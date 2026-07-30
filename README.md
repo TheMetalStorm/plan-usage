@@ -18,10 +18,11 @@
 │   Freebuff   ● 80%     │  window:     5h                             │
 │                       │  resets:     in 3h 14m                       │
 │                       │                                              │
-│                       │  Free models:                                │
-│                       │  • Big Pickle                                │
-│                       │  • DeepSeek V4 Flash Free                    │
-│                       │  • Ling-3.0-flash Free                       │
+│                       │  Premium models:                             │
+│                       │  • DeepSeek V4 Pro                            │
+│                       │  • MiniMax M3                                 │
+│                       │  Standard models:                            │
+│                       │  • DeepSeek V4 Flash                          │
 ├──────────┴───────────────────────────────────────────────────────────┤
 │  ←/h →/l switch    r refresh    R refresh all    D debug    q quit   │
 └──────────────────────────────────────────────────────────────────────┘
@@ -52,8 +53,10 @@ format-prefix = " "
   `$XDG_STATE_HOME/plan-usage`.
 - **Debug mode** (`D` in the TUI or `--debug` flag) shows the last 64 log
   entries for every refresh attempt.
-- **Cheap probes**: each refresh sends a `max_tokens=1` no-op request —
-  typically billed as a fraction of a cent.
+- **Freebuff quota**: reads the authenticated, read-only
+  `GET /api/v1/freebuff/session` snapshot. It reports the shared Premium or
+  Standard session quota, including fractional session units and the server's
+  next reset at midnight Pacific time.
 
 ## 🚀 Install
 
@@ -133,6 +136,12 @@ debug: false
   HTTP request and parses `x-ratelimit-*-*` (OpenAI-style) and
   `anthropic-ratelimit-*-*` (Anthropic-style) headers.
 - Auth discovery is in `internal/auth` (`Finder` type).
+
+Freebuff usage is obtained from the endpoint used by the Freebuff CLI itself.
+The request is deliberately a bearer-authenticated GET: it does not claim,
+end, or change a session. The endpoint is currently undocumented, so a future
+Freebuff API change may require a parser update. Freebuff's session units and
+quota reset use Pacific time; values such as `3.6 / 6` are preserved.
 
 ## 🧩 Adding a provider
 

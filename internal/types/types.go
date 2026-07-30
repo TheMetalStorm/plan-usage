@@ -24,11 +24,20 @@ type Provider interface {
 	FetchUsage(ctx context.Context) (*UsageStats, error)
 }
 
-// FreeModel describes a model available without additional cost.
+// FreeModel describes a model surfaced in the "Premium models" /
+// "Free models" sections of the TUI.
+//
+// Premium == false is the historical default: every provider's static
+// list was a back-of-the-envelope "free-tier" list and the TUI rendered
+// one block labelled "Free models". For Freebuff, Premium means that the
+// model consumes the shared Premium session quota. It does not imply that
+// the user needs a paid subscription. Leaving Premium at its zero value
+// keeps older providers backwards-compatible without touching their tables.
 type FreeModel struct {
-	ID    string // canonical provider-side identifier
-	Label string // human-friendly label
-	Notes string // optional caveat (e.g. "may log data for training")
+	ID      string // canonical provider-side identifier
+	Label   string // human-friendly label
+	Notes   string // optional caveat (e.g. "may log data for training")
+	Premium bool   // true = consumes Freebuff's Premium session quota
 }
 
 // UsageStats is the canonical usage snapshot across providers.
@@ -78,10 +87,10 @@ func (u UsageStats) Remaining() float64 {
 
 // Snapshot is the per-provider record persisted by the state store.
 type Snapshot struct {
-	Provider    string       `json:"provider"`
-	DisplayName string       `json:"display_name"`
-	Icon        string       `json:"icon"`
-	Usage       *UsageStats  `json:"usage,omitempty"`
+	Provider    string      `json:"provider"`
+	DisplayName string      `json:"display_name"`
+	Icon        string      `json:"icon"`
+	Usage       *UsageStats `json:"usage,omitempty"`
 	// Windows holds additional usage windows (e.g. OpenCode Go's
 	// $12/5h + $30/week + $60/month). Providers that implement the
 	// optional MultiWindowProvider interface populate this slice;
@@ -94,6 +103,6 @@ type Snapshot struct {
 
 // Aggregate is the entire state-file payload.
 type Aggregate struct {
-	GeneratedAt time.Time            `json:"generated_at"`
-	Providers   map[string]Snapshot  `json:"providers"`
+	GeneratedAt time.Time           `json:"generated_at"`
+	Providers   map[string]Snapshot `json:"providers"`
 }

@@ -217,22 +217,110 @@ func (f *Finder) CommandCodeToken() (*Credential, error) {
 }
 
 // FreebuffCredentials reads the manicode credentials file.
+//
+// Two shapes are supported because the Freebuff CLI restructured its
+// on-disk format: as of v0.0.130 the file nests the account under a
+// `default` key.
+//
+//	Modern (>= v0.0.x):
+//	    {"default": {"id":"…","name":"…","email":"…",
+//	                 "authToken":"…","fingerprintId":"…", …}}
+//
+//	Legacy:
+//	    {"authToken":"…","username":"…"}
+//
+// Older installs keep working untouched; new installs expose the richer
+// account metadata via FreebuffAccount().
 func (f *Finder) FreebuffCredentials() (*Credential, error) {
 	raw, err := f.readFile(f.FreebuffCredentialsPath())
 	if err != nil {
 		return nil, fmt.Errorf("freebuff credentials: %w", err)
 	}
-	var doc struct {
+	// Modern shape first — if `default.authToken` parses, prefer it so
+	// we surface the richer path in the Source string for the debug panel.
+	var modern struct {
+		Default struct {
+			AuthToken string `json:"authToken"`
+		} `json:"default"`
+	}
+	if err := json.Unmarshal(raw, &modern); err == nil &&
+		strings.TrimSpace(modern.Default.AuthToken) != "" {
+		return &Credential{
+			Token:  strings.TrimSpace(modern.Default.AuthToken),
+			Source: f.FreebuffCredentialsPath() + " (#default.authToken)",
+		}, nil
+	}
+	// Legacy fallback.
+	var legacy struct {
 		AuthToken string `json:"authToken"`
 		Username  string `json:"username"`
 	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	if err := json.Unmarshal(raw, &legacy); err != nil {
 		return nil, fmt.Errorf("freebuff credentials: parse: %w", err)
 	}
-	if doc.AuthToken == "" {
-		return nil, errors.New("freebuff credentials: missing authToken")
+	if strings.TrimSpace(legacy.AuthToken) == "" {
+		return nil, errors.New("freebuff credentials: no authToken under default or top-level")
 	}
-	return &Credential{Token: doc.AuthToken, Source: f.FreebuffCredentialsPath()}, nil
+	return &Credential{Token: strings.TrimSpace(legacy.AuthToken), Source: f.FreebuffCredentialsPath()}, nil
+}
+
+// FreebuffAccount returns the user identity (name + email) from
+// credentials.json when present. Returns ok=false when the file is
+// missing/parsable, or when neither legacy nor modern shape carries
+// any account metadata. Email is preferred over Username when both
+// exist.
+func (f *Finder) FreebuffAccount() (name, email string, ok bool) {
+	raw, err := f.readFile(f.FreebuffCredentialsPath())
+	if err != nil {
+		return "", "", false
+	}
+	var doc struct {
+		Default struct {
+			Name  string `json:"name"`
+			Email string `json:"email"`
+		} `json:"default"`
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return "", "", false
+	}
+	name = strings.TrimSpace(doc.Default.Name)
+	email = strings.TrimSpace(doc.Default.Email)
+	if email == "" && doc.Username != "" {
+		email = doc.Username
+	}
+	if name == "" && email == "" {
+		return "", "", false
+	}
+	return name, email, true
+}
+
+// FreebuffSettingsPath is the canonical runtime-state file.
+func (f *Finder) FreebuffSettingsPath() string {
+	return filepath.Join(f.XDG, "manicode", "settings.json")
+}
+
+// FreebuffSettings returns the runtime configuration the CLI writes to
+// settings.json. The mode field is what we use as a coarse "tier"
+// indicator today (`DEFAULT` typically maps to "free"; anything we
+// don't recognise is surfaced in the UI as a non-free tier hint).
+// freebuffModel is the model the CLI has selected by default.
+func (f *Finder) FreebuffSettings() (mode, freebuffModel string, adsEnabled, hasFirstPrompt bool, ok bool) {
+	raw, err := f.readFile(f.FreebuffSettingsPath())
+	if err != nil {
+		return "", "", false, false, false
+	}
+	var doc struct {
+		Mode                    string `json:"mode"`
+		AdsEnabled              bool   `json:"adsEnabled"`
+		FreebuffModel           string `json:"freebuffModel"`
+		HasSubmittedFirstPrompt bool   `json:"hasSubmittedFirstPrompt"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return "", "", false, false, false
+	}
+	return strings.TrimSpace(doc.Mode), strings.TrimSpace(doc.FreebuffModel),
+		doc.AdsEnabled, doc.HasSubmittedFirstPrompt, true
 }
 
 // ClinePassCredentials locates a Cline Pass bearer token by checking, in
