@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simon/usage/internal/auth"
-	"github.com/simon/usage/internal/config"
-	"github.com/simon/usage/internal/probe"
-	"github.com/simon/usage/internal/types"
+	"github.com/TheMetalStorm/provider-usage/internal/auth"
+	"github.com/TheMetalStorm/provider-usage/internal/config"
+	"github.com/TheMetalStorm/provider-usage/internal/probe"
+	"github.com/TheMetalStorm/provider-usage/internal/types"
 )
 
 // Provider implements types.Provider for Freebuff.

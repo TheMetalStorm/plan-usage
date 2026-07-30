@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/simon/usage/internal/config"
-	"github.com/simon/usage/internal/daemon"
+	"github.com/TheMetalStorm/provider-usage/internal/config"
+	"github.com/TheMetalStorm/provider-usage/internal/daemon"
 )
 
 // runDaemon starts the long-running poller.

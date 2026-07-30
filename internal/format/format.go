@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simon/usage/internal/types"
+	"github.com/TheMetalStorm/provider-usage/internal/types"
 )
 
 // Token expansion happens per-provider.  Empty fields are substituted with

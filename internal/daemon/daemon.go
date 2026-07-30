@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/simon/usage/internal/config"
-	"github.com/simon/usage/internal/providers"
-	"github.com/simon/usage/internal/state"
-	"github.com/simon/usage/internal/types"
+	"github.com/TheMetalStorm/provider-usage/internal/config"
+	"github.com/TheMetalStorm/provider-usage/internal/providers"
+	"github.com/TheMetalStorm/provider-usage/internal/state"
+	"github.com/TheMetalStorm/provider-usage/internal/types"
 )
 
 // Daemon wraps the loop.

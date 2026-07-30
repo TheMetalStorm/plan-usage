@@ -10,11 +10,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/simon/usage/internal/config"
-	"github.com/simon/usage/internal/debug"
-	"github.com/simon/usage/internal/providers"
-	"github.com/simon/usage/internal/state"
-	"github.com/simon/usage/internal/types"
+	"github.com/TheMetalStorm/provider-usage/internal/config"
+	"github.com/TheMetalStorm/provider-usage/internal/debug"
+	"github.com/TheMetalStorm/provider-usage/internal/providers"
+	"github.com/TheMetalStorm/provider-usage/internal/state"
+	"github.com/TheMetalStorm/provider-usage/internal/types"
 )
 
 // Model is the bubbletea root model.

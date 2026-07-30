@@ -1,4 +1,4 @@
-module github.com/simon/usage
+module github.com/TheMetalStorm/provider-usage
 
 go 1.26.5
 

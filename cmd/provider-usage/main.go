@@ -1,4 +1,4 @@
-// Command usage is a multi-provider coding-plan usage monitor with a
+// Command provider-usage is a multi-provider coding-plan usage monitor with a
 // Polybar widget and an interactive TUI dashboard.
 //
 // Global flags (--config, --state-dir, --debug, --dry-run) may appear
@@ -7,14 +7,14 @@
 //
 // Subcommands:
 //
-//	usage show              open the TUI dashboard
-//	usage polybar           one-line widget for polybar
-//	usage daemon            long-running poller (writes state file)
-//	usage check [provider]  dump a single provider's snapshot as JSON
-//	usage refresh           refresh every enabled provider once
-//	usage init polybar      write an example polybar snippet to stdout
-//	usage init system       write a systemd --user unit file to stdout
-//	usage version           print version info
+//	provider-usage show              open the TUI dashboard
+//	provider-usage polybar           one-line widget for polybar
+//	provider-usage daemon            long-running poller (writes state file)
+//	provider-usage check [provider]  dump a single provider's snapshot as JSON
+//	provider-usage refresh           refresh every enabled provider once
+//	provider-usage init polybar      write an example polybar snippet to stdout
+//	provider-usage init system       write a systemd --user unit file to stdout
+//	provider-usage version           print version info
 package main
 
 import (
@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/simon/usage/internal/config"
+	"github.com/TheMetalStorm/provider-usage/internal/config"
 )
 
 var version = "dev"
@@ -68,7 +68,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runInitStatus(scanned.cmdArgs, stdout, stderr)
 
 	case "version", "-v", "--version":
-		fmt.Fprintln(stdout, "usage", version)
+		fmt.Fprintln(stdout, "provider-usage", version)
 		return 0
 
 	case "help", "-h", "--help":
@@ -197,7 +197,7 @@ func errInt(err error) int {
 }
 
 func usageTo(w io.Writer) {
-	fmt.Fprint(w, `usage — multi-provider coding-plan monitor
+	fmt.Fprint(w, `provider-usage — multi-provider coding-plan monitor
 
 subcommands:
   show           open the interactive TUI dashboard

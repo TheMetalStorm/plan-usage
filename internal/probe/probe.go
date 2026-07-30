@@ -29,7 +29,7 @@ func New() *Client {
 	}
 	return &Client{
 		HC:        &http.Client{Timeout: 8 * time.Second, Transport: t},
-		UserAgent: "usage/0.1 (+https://freebuff.com)",
+		UserAgent: "provider-usage/0.1 (+https://freebuff.com)",
 	}
 }
 
