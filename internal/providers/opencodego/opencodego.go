@@ -68,8 +68,15 @@ var opencodegoFreeModels = []types.FreeModel{
 
 func (p *Provider) AvailableModels() []types.FreeModel { return opencodegoFreeModels }
 
-// IsConfigured: auth.json has an `opencode-go` entry with a key, OR
-// we have a local opencode.db with cost data.
+// Plan limits for the three Go subscription windows.
+const (
+	plan5h     = 12.0
+	planWeekly = 30.0
+	planMonth  = 60.0
+)
+
+// IsConfigured: configured if auth.json has an `opencode-go` entry OR
+// we can read the local opencode.db with cost data.
 func (p *Provider) IsConfigured() error {
 	a := p.a
 	if a == nil {
@@ -81,11 +88,17 @@ func (p *Provider) IsConfigured() error {
 		p.a = a
 	}
 
+	// Always try to open the local DB — powers cost history.
+	db, dbErr := opencodeutil.OpenDB()
+	if dbErr == nil && db != nil {
+		p.db = db
+	}
+
 	// Check config override first.
 	if p.cfg != nil {
 		if k, _, _, ok := p.cfg.Override("opencodego"); ok && k != "" {
 			p.apiKey = k
-			return nil
+			return nil // configured via override
 		}
 	}
 
@@ -100,24 +113,26 @@ func (p *Provider) IsConfigured() error {
 			}
 			if json.Unmarshal(raw, &entry) == nil && entry.Key != "" {
 				p.apiKey = entry.Key
-				return nil
+				return nil // configured via API key
 			}
-			return errors.New("opencodego: `opencode-go` entry is missing the key field")
+			if p.db == nil {
+				return errors.New("opencodego: `opencode-go` entry is missing the key field")
+			}
+			return nil // DB available even without valid API key
 		}
 	}
 
-	// Still consider configured if we can read the local DB without API key.
-	db, dbErr := opencodeutil.OpenDB()
-	if dbErr == nil && db != nil {
-		p.db = db
+	// DB alone is enough to be "configured".
+	if p.db != nil {
 		return nil
 	}
 
 	return fmt.Errorf("opencodego: no auth.json entry for opencode-go (looked at %s) and cannot read local DB: %v", src, dbErr)
 }
 
-// FetchUsage returns the primary window (5h) with data from local DB
-// and optionally the _server endpoint for percentage overlay.
+// FetchUsage returns the primary window (weekly costs by default, since
+// the 5h rolling window is frequently zero). The SnapshotWindows method
+// provides all three windows (5h, weekly, monthly) for multi-window UIs.
 func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 	// Ensure auth / DB are resolved.
 	if p.apiKey == "" && p.db == nil {
@@ -126,40 +141,62 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 
 	now := time.Now()
 
-	// Compute local cost for 5h window.
+	// Compute local costs for each window.
 	cost5h := p.costSince(now.Add(-5 * time.Hour))
+	costWeekly := p.costSince(weekStart(now))
+	costMonth := p.costSince(monthStart(now))
 
-	// Try server-side overlay for percentage if we have auth.
-	var serverPct5h float64 = -1
-	serverReset5h := time.Duration(0)
-	serverData, err := p.fetchServerUsage(ctx)
-	if err == nil && serverData != nil && serverData.RollingPercent > 0 {
-		serverPct5h = serverData.RollingPercent
-		serverReset5h = time.Duration(serverData.RollingReset) * time.Second
+	// Try server-side overlay for rolling percentage if we have a cookie.
+	serverData, _ := p.fetchServerUsage(ctx)
+
+	// Pick the most meaningful primary window.
+	// Prefer weekly (often has data), then 5h, then monthly.
+	var primary types.UsageStats
+
+	if serverData != nil && serverData.RollingPercent > 0 {
+		// Server overlay available — show rolling percentage.
+		resetIn := time.Duration(serverData.RollingReset) * time.Second
+		primary = types.UsageStats{
+			Used:        serverData.RollingPercent,
+			Total:       100,
+			Unit:        types.UnitCount,
+			WindowLabel: "5h rolling",
+			ResetIn:     resetIn,
+			ResetAt:     now.Add(resetIn),
+			LastProbeAt: now,
+			Note:        "server usage",
+		}
+	} else if costWeekly > 0 {
+		// Weekly local cost is non-zero — show that.
+		primary = types.UsageStats{
+			Used:        costWeekly,
+			Total:       planWeekly,
+			Unit:        types.UnitUSD,
+			WindowLabel: "weekly",
+			LastProbeAt: now,
+			Note:        "local costs since Sunday",
+		}
+	} else if costMonth > 0 {
+		primary = types.UsageStats{
+			Used:        costMonth,
+			Total:       planMonth,
+			Unit:        types.UnitUSD,
+			WindowLabel: "monthly",
+			LastProbeAt: now,
+			Note:        "local costs since 1st",
+		}
+	} else {
+		primary = types.UsageStats{
+			Used:        cost5h,
+			Total:       plan5h,
+			Unit:        types.UnitUSD,
+			WindowLabel: "5h",
+			LastProbeAt: now,
+			Note:        "no recent paid usage — check opencode.ai/auth",
+		}
 	}
 
-	// Build primary window: use server percentage if available,
-	// otherwise show local dollar cost.
-	stats := &types.UsageStats{
-		Used:        cost5h,
-		Total:       12.0,
-		Unit:        types.UnitUSD,
-		WindowLabel: "5h",
-		ResetIn:     serverReset5h,
-		ResetAt:     now.Add(serverReset5h),
-		LastProbeAt: now,
-		Note:        "local DB costs — check opencode.ai for live numbers",
-	}
-
-	if serverPct5h >= 0 {
-		stats.Used = serverPct5h
-		stats.Total = 100.0
-		stats.Unit = types.UnitCount
-		stats.WindowLabel = "5h rolling"
-		stats.Note = "server usage overlaid on local costs"
-	}
-
-	return stats, nil
+	return &primary, nil
 }
 
 // SnapshotWindows returns the three Go-plan windows with data from
@@ -167,13 +204,6 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 // that the TUI's compact view summarizes.
 func (p *Provider) SnapshotWindows() []types.UsageStats {
 	now := time.Now()
-
-	// Plan limits.
-	const (
-		limit5h     = 12.0
-		limitWeekly = 30.0
-		limitMonth  = 60.0
-	)
 
 	// Compute local costs for each window.
 	cost5h := p.costSince(now.Add(-5 * time.Hour))
@@ -186,7 +216,7 @@ func (p *Provider) SnapshotWindows() []types.UsageStats {
 	return []types.UsageStats{
 		{
 			Used:         cost5h,
-			Total:        limit5h,
+			Total:        plan5h,
 			Unit:         types.UnitUSD,
 			WindowLabel:  "5h",
 			Note:         "local costs, last 5 hours",
@@ -194,7 +224,7 @@ func (p *Provider) SnapshotWindows() []types.UsageStats {
 		},
 		{
 			Used:         costWeekly,
-			Total:        limitWeekly,
+			Total:        planWeekly,
 			Unit:         types.UnitUSD,
 			WindowLabel:  "weekly",
 			Note:         "local costs since Sunday",
@@ -202,7 +232,7 @@ func (p *Provider) SnapshotWindows() []types.UsageStats {
 		},
 		{
 			Used:         costMonth,
-			Total:        limitMonth,
+			Total:        planMonth,
 			Unit:         types.UnitUSD,
 			WindowLabel:  "monthly",
 			Note:         historyNote,

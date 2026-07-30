@@ -75,6 +75,8 @@ Files:
 - Run `go mod tidy`
 - Verify `go build ./...` compiles
 
+(commit 77084ea)
+
 ## Out of scope
 
 - Browser cookie import (Chrome/Dia) — that's macOS-specific CodexBar functionality.

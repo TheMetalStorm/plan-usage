@@ -202,10 +202,8 @@ func (s *ServerClient) fetchServerText(ctx context.Context, req serverRequest) (
 	httpReq.Header.Set("X-Server-Id", req.serverID)
 	httpReq.Header.Set("X-Server-Instance", fmt.Sprintf("server-fn:%d", time.Now().UnixNano()))
 
-	// Auth: try Bearer token first, then cookie.
-	if s.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
-	}
+	// Auth: the _server endpoint only accepts session cookies, not API keys.
+	// Bearer token auth is not supported — we rely solely on the cookie cache.
 	if s.cookies != nil {
 		s.cookies.AttachToRequest(httpReq)
 	}
