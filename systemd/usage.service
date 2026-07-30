@@ -1,0 +1,25 @@
+[Unit]
+Description=usage daemon — multi-provider coding-plan monitor
+Documentation=https://github.com/simon/usage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h expands to $HOME.  Edit if you installed the binary elsewhere.
+ExecStart=%h/.local/bin/usage daemon
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+# Hardening (optional).  Uncomment if you'd like; tokens are still in the
+# user's home directory so the daemon MUST keep access.
+# NoNewPrivileges=yes
+# ProtectSystem=strict
+# ProtectHome=read-only
+# PrivateTmp=yes
+# MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=default.target

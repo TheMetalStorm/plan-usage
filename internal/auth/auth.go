@@ -1,0 +1,205 @@
+// Package auth discovers credentials from native-CLI config files
+// (e.g. ~/.codex/auth.json, ~/.local/share/opencode/auth.json) and
+// from environment overrides. The user can always supply a manual
+// override through Config.
+package auth
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// Credential is a single resolved token ready to feed to a Provider.
+type Credential struct {
+	Token    string // bearer token / api key
+	Endpoint string // optional endpoint override (CLI defaults preserved if empty)
+	Source   string // human-readable origin for the debug panel
+}
+
+// Finder abstracts filesystem paths so tests can inject temp dirs.
+type Finder struct {
+	Home string // $HOME
+	XDG  string // $XDG_CONFIG_HOME || $HOME/.config
+	Data string // $XDG_DATA_HOME   || $HOME/.local/share
+}
+
+// NewFinder returns a Finder with sensible defaults.
+func NewFinder() (*Finder, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	xdg := os.Getenv("XDG_CONFIG_HOME")
+	if xdg == "" {
+		xdg = filepath.Join(home, ".config")
+	}
+	data := os.Getenv("XDG_DATA_HOME")
+	if data == "" {
+		data = filepath.Join(home, ".local", "share")
+	}
+	return &Finder{Home: home, XDG: xdg, Data: data}, nil
+}
+
+// CodexPath -- ~/.codex/auth.json
+func (f *Finder) CodexPath() string {
+	return filepath.Join(f.Home, ".codex", "auth.json")
+}
+
+// OpenCodeAuthPath -- $XDG_DATA_HOME/opencode/auth.json
+func (f *Finder) OpenCodeAuthPath() string {
+	return filepath.Join(f.Data, "opencode", "auth.json")
+}
+
+// CommandCodeAuthPath -- ~/.commandcode/auth.json
+func (f *Finder) CommandCodeAuthPath() string {
+	return filepath.Join(f.Home, ".commandcode", "auth.json")
+}
+
+// FreebuffCredentialsPath -- $XDG_CONFIG_HOME/manicode/credentials.json
+func (f *Finder) FreebuffCredentialsPath() string {
+	return filepath.Join(f.XDG, "manicode", "credentials.json")
+}
+
+// ClineConfigPaths -- VS Code global storage + ~/.cline/config.json
+func (f *Finder) ClineConfigPaths() []string {
+	return []string{
+		filepath.Join(f.XDG, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings.json"),
+		filepath.Join(f.XDG, "Code", "User", "globalStorage", "roo-cline.roo-cline", "settings.json"),
+		filepath.Join(f.Home, ".cline", "config.json"),
+		filepath.Join(f.XDG, "cline", "config.json"),
+	}
+}
+
+// readFile returns os.ReadFile wrapped for symmetry.
+func (f *Finder) readFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// CodexToken reads ~/.codex/auth.json and extracts the bearer / api_key.
+func (f *Finder) CodexToken() (*Credential, error) {
+	raw, err := f.readFile(f.CodexPath())
+	if err != nil {
+		return nil, fmt.Errorf("codex auth: %w", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("codex auth: parse: %w", err)
+	}
+	for _, k := range []string{"OPENAI_API_KEY", "api_key", "access_token", "token"} {
+		if v, ok := doc[k].(string); ok && v != "" {
+			return &Credential{Token: v, Source: f.CodexPath()}, nil
+		}
+	}
+	return nil, errors.New("codex auth: token field missing")
+}
+
+// OpenCodeAuth returns the full opencode auth.json (map of provider -> blob).
+func (f *Finder) OpenCodeAuth() (map[string]json.RawMessage, string, error) {
+	raw, err := f.readFile(f.OpenCodeAuthPath())
+	if err != nil {
+		return nil, "", fmt.Errorf("opencode auth: %w", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, "", fmt.Errorf("opencode auth: parse: %w", err)
+	}
+	return m, f.OpenCodeAuthPath(), nil
+}
+
+// CommandCodeToken prefers the env var, falls back to the auth file.
+func (f *Finder) CommandCodeToken() (*Credential, error) {
+	if env := os.Getenv("COMMAND_CODE_API_KEY"); env != "" {
+		return &Credential{Token: env, Source: "env:COMMAND_CODE_API_KEY"}, nil
+	}
+	raw, err := f.readFile(f.CommandCodeAuthPath())
+	if err != nil {
+		return nil, fmt.Errorf("commandcode auth: %w", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("commandcode auth: parse: %w", err)
+	}
+	for _, k := range []string{"api_key", "apiKey", "token", "access_token"} {
+		if v, ok := doc[k].(string); ok && v != "" {
+			return &Credential{Token: v, Source: f.CommandCodeAuthPath()}, nil
+		}
+	}
+	return nil, errors.New("commandcode auth: no api_key in file")
+}
+
+// FreebuffCredentials reads the manicode credentials file.
+func (f *Finder) FreebuffCredentials() (*Credential, error) {
+	raw, err := f.readFile(f.FreebuffCredentialsPath())
+	if err != nil {
+		return nil, fmt.Errorf("freebuff credentials: %w", err)
+	}
+	var doc struct {
+		AuthToken string `json:"authToken"`
+		Username  string `json:"username"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("freebuff credentials: parse: %w", err)
+	}
+	if doc.AuthToken == "" {
+		return nil, errors.New("freebuff credentials: missing authToken")
+	}
+	return &Credential{Token: doc.AuthToken, Source: f.FreebuffCredentialsPath()}, nil
+}
+
+// ClinePassCredentials scans candidate cline config paths for an api key.
+func (f *Finder) ClinePassCredentials() (*Credential, error) {
+	for _, p := range f.ClineConfigPaths() {
+		raw, err := f.readFile(p)
+		if err != nil {
+			continue
+		}
+		if cred := clineScan(raw, p); cred != nil {
+			return cred, nil
+		}
+	}
+	return nil, errors.New("cline pass: no credentials found in any candidate path")
+}
+
+// clineScan extracts an api key from a Cline config blob. Cline has evolved
+// over time, so we test a few known shapes.
+func clineScan(raw []byte, src string) *Credential {
+	var loose struct {
+		APIKey string `json:"api_key"`
+		Token  string `json:"token"`
+		Cline  struct {
+			APIKey string `json:"apiKey"`
+		} `json:"cline"`
+	}
+	if err := json.Unmarshal(raw, &loose); err == nil {
+		if t := firstNonEmpty(loose.APIKey, loose.Token, loose.Cline.APIKey); t != "" {
+			return &Credential{Token: t, Source: src}
+		}
+	}
+	// Fallback: VS Code settings-style "cline-pass.apiKey" / "clinePass.apiKey".
+	for _, key := range []string{`"cline-pass.apiKey"`, `"clinePass.apiKey"`, `"apiKey"`} {
+		if i := strings.Index(string(raw), key); i >= 0 {
+			rest := string(raw)[i+len(key):]
+			if j := strings.Index(rest, ":"); j >= 0 {
+				rest = rest[j+1:]
+				if k := strings.Index(rest, `"`); k >= 0 {
+					rest = rest[k+1:]
+					if l := strings.Index(rest, `"`); l >= 0 {
+						return &Credential{Token: rest[:l], Source: src}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}

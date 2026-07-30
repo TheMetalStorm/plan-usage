@@ -1,0 +1,30 @@
+# Compiled binary built by `make build`
+/usage
+/dist/
+
+# Go test/coverage outputs
+*.test
+*.out
+coverage.txt
+
+# Vendored deps (none today, but be safe)
+# vendor/
+
+# Go workspace files (multi-module repo)
+go.work
+go.work.sum
+
+# Local env / secrets
+.env
+.env.local
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local-only scratch state files (e.g. when running with --state-dir=/tmp/...)
+*.tmp
