@@ -206,7 +206,7 @@ const cliCooldown = 30 * time.Minute
 // `codex login` again, we want the daemon to pick up the fresh token on
 // its very next tick — 5 seconds beats 30 minutes by a wide margin.
 //
-// Note: the daemon's refresh_interval (default 60s) is the actual retry
+// Note: the daemon's refresh_interval (default 3m) is the actual retry
 // cadence when the daemon is running. 5s is the floor used for manual
 // `provider-usage refresh` and TUI `r` keystrokes; it isn't a hot-loop.
 const cliCooldownShort = 5 * time.Second

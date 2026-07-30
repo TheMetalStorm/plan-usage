@@ -16,8 +16,11 @@ const DefaultPath = ".config/plan-usage/config.yaml"
 
 // Config is the user-overridable configuration.
 type Config struct {
+	// ConfigPath is the source file used by Load. It is intentionally not
+	// serialised; desktop settings can persist back to the same file.
+	ConfigPath     string                    `yaml:"-"`
 	Providers      map[string]ProviderConfig `yaml:"providers"`
-	Enabled        []string                  `yaml:"enabled"`         // optional allowlist
+	Enabled        []string                  `yaml:"enabled"` // optional allowlist
 	RefreshEvery   time.Duration             `yaml:"refresh_interval"`
 	ProbeMaxTokens int                       `yaml:"probe_max_tokens"`
 	Polybar        PolybarConfig             `yaml:"polybar"`
@@ -109,6 +112,7 @@ func Load(path string) (*Config, error) {
 		home, _ := os.UserHomeDir()
 		path = filepath.Join(home, DefaultPath)
 	}
+	cfg.ConfigPath = path
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
