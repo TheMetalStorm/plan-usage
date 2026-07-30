@@ -1,6 +1,6 @@
 # Plan: Fix OpenCode Zen + Go providers
 
-**Status:** ✅ plan approved, implementation complete
+**Status:** ✅ plan approved, implementation complete (+ UI nav improvements ✅, TUI layout alignment fix ✅, provider-independent responsive layout ✅)
 
 ## Problem
 
@@ -76,6 +76,45 @@ Files:
 - Verify `go build ./...` compiles
 
 (commits 77084ea, aec235c)
+
+---
+
+### Part 5 — TUI navigation: up/down + clickable provider names   ✅
+
+- Replace left/right arrow + h/l navigation with up/down arrow + k/j
+- Add mouse click handler: clicking a provider name in the left panel selects it
+- Add mouse wheel support (wheel up/down navigates providers)
+- Update footer keybinding hints
+- File: `internal/tui/tui.go`
+
+---
+
+### Part 6 — Fix TUI layout: align names, badges, bars, prevent wrapping   ✅
+
+**Problem:** Provider names and percentage badges in the left panel weren't vertically aligned because each row used a different name-column width. Window labels and bars in the multi‑window section didn't align (labels wider than the `%-7s` format pushed bars right). Single‑window key-value labels were hardcoded. Text wrapped in narrow terminals.
+
+**Changes in `internal/tui/tui.go`:**
+- **Left panel `renderList()` — two-pass layout**: first pass measures the widest badge across all rows; second pass uses a single fixed `nameW` width for every row. This guarantees badges and names start at the same column regardless of badge width. Name truncation uses `lipgloss.Width()` (display‑width aware, not byte count).
+- **Shared `listPanelWidth()` helper**: extracted the list‑panel width computation into one method (`m.width / 3`, min 22) used by `View()`, `handleMouse()`, `renderList()`, and `detailContentWidth()`. Changes ratio `1/4 → 1/3` for more name room.
+- **Multi‑window section**: pre‑scans window labels to find `maxLabelW`; uses that to align all labels. Adaptive bar width (`barW`) computed from `detailContentWidth()` so rows never wrap. Percentage column uses `%5s` fixed width. Note indent computed dynamically from rendered prefix width.
+- **Single‑window section**: key-value labels (`used`/`total`/`window`/`resets`) aligned to a dynamic `valueCol` computed from the widest label (kept at column 13 to match the `refreshed` line). Adaptive bar width so `progressBar` + percentage never wraps the detail panel.
+- **Responsive ("reaktiv")**: all widths adapt to terminal size via `detailContentWidth()` / `listPanelWidth()`; bar widths shrink in narrow panels and grow in wide ones.
+
+**Verification:** `go build ./...` compiles; `go vet ./internal/tui/` passes; test suite passes.
+
+---
+
+### Part 7 — Make layout provider-independent and width-correct   ✅
+
+**Problem:** Part 6 used a list width based on `1/3` while debug mode renders the list at `1/4`, so the list was formatted for a wider panel than it received. Multi-window rows also need to preserve aligned bars/percentages when usage text does not fit.
+
+**Changes in `internal/tui/tui.go`:**
+- Centralize list/detail panel widths and pass the actual assigned panel width into renderers.
+- Make list columns use the actual panel width in normal and debug layouts.
+- Keep labels, bars, and percentage columns fixed; move usage details to a continuation line when the responsive width cannot fit them inline.
+- Add TUI layout tests covering non-OpenCode labels, debug columns, alignment, and narrow widths.
+
+**Verification:** `go test ./internal/tui/`, `go build ./...`, and `go vet ./internal/tui/` pass.
 
 ## Out of scope
 
