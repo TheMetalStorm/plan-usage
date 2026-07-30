@@ -1,13 +1,4 @@
-// Package freebuff implements the types.Provider interface for Freebuff.
-//
-// Freebuff does not expose a public REST API.  We rely on:
-//   1. The Freebuff CLI's authenticated session (GitHub OAuth).
-//   2. A minimal GET against the same backend endpoint the CLI polls for
-//      session info. The exact path & response shape is the empirical
-//      reverse-engineered one; if it changes this provider will fail
-//      gracefully and just show the static free-model list.
-//
-// The auth token comes from ~/.config/manicode/credentials.json.
+// Package freebuff implements the read-only Freebuff session usage probe.
 package freebuff
 
 import (
@@ -25,26 +16,42 @@ import (
 	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
+const sessionPath = "/api/v1/freebuff/session"
+
 // Provider implements types.Provider for Freebuff.
 type Provider struct {
 	a     *auth.Finder
 	probe *probe.Client
 	cfg   *config.Config
 	hc    *http.Client
+
+	// endpointOverride is useful for tests and compatible staging endpoints.
+	// The request path remains the read-only session endpoint.
+	endpointOverride string
 }
 
 // New returns a Freebuff provider.
 func New() *Provider {
-	return &Provider{hc: &http.Client{Timeout: 8 * time.Second}, probe: probe.New()}
-}
-
-// NewWith wires up explicit deps.
-func NewWith(a *auth.Finder, c *config.Config) *Provider {
 	return &Provider{
-		a:     a,
-		cfg:   c,
 		hc:    &http.Client{Timeout: 8 * time.Second},
 		probe: probe.New(),
+	}
+}
+
+// NewWith wires up explicit dependencies.
+func NewWith(a *auth.Finder, c *config.Config) *Provider {
+	root := "https://www.codebuff.com"
+	if c != nil {
+		if ep, ok := c.Providers["freebuff"]; ok && ep.Endpoint != "" {
+			root = strings.TrimRight(ep.Endpoint, "/")
+		}
+	}
+	return &Provider{
+		a:                a,
+		cfg:              c,
+		hc:               &http.Client{Timeout: 8 * time.Second},
+		probe:            probe.New(),
+		endpointOverride: root,
 	}
 }
 
@@ -52,23 +59,36 @@ func (p *Provider) Name() string        { return "freebuff" }
 func (p *Provider) DisplayName() string { return "Freebuff" }
 func (p *Provider) Icon() string        { return "" }
 
-// freebuffFreeModels is drawn from freebuff.com / CodebuffAI repos.
-var freebuffFreeModels = []types.FreeModel{
-	{ID: "minimax-m3", Label: "minimax-m3", Notes: "smartest unlimited model; data may train"},
-	{ID: "minimax-m2.7", Label: "minimax-m2.7", Notes: "fastest unlimited model"},
-	{ID: "deepseek-v4-pro", Label: "DeepSeek V4 Pro"},
-	{ID: "deepseek-v4-flash", Label: "DeepSeek V4 Flash"},
-	{ID: "mimo-2.5-pro", Label: "MiMo 2.5 Pro"},
-	{ID: "mimo-2.5", Label: "MiMo 2.5"},
-	{ID: "kimi-k2.7-code", Label: "Kimi K2.7 Code"},
-	{ID: "kimi-k2.6", Label: "Kimi K2.6"},
-	{ID: "gemini-3.1-flash-lite-preview", Label: "Gemini 3.1 Flash Lite Preview", Notes: "for file search / research"},
+// Keep this list aligned with the model selector exposed by the Freebuff CLI.
+// API quota snapshots can contain compatibility, referral, or experimental
+// keys; those keys are deliberately not treated as user-facing models.
+var freebuffPremiumCatalog = []types.FreeModel{
+	{ID: "deepseek/deepseek-v4-pro", Label: "DeepSeek V4 Pro", Premium: true},
+	{ID: "minimax/minimax-m3", Label: "MiniMax M3", Premium: true},
+	{ID: "openai/gpt-5.6-luna", Label: "GPT-5.6 Luna", Premium: true},
+	{ID: "mimo/mimo-v2.5-pro", Label: "MiMo 2.5 Pro", Premium: true},
 }
 
-func (p *Provider) AvailableModels() []types.FreeModel { return freebuffFreeModels }
+var freebuffStandardCatalog = []types.FreeModel{
+	{ID: "deepseek/deepseek-v4-flash", Label: "DeepSeek V4 Flash"},
+	{ID: "mimo/mimo-v2.5", Label: "MiMo 2.5"},
+}
 
-// IsConfigured: need ~/.config/manicode/credentials.json with authToken.
+// AvailableModels returns the static catalog shown by the Freebuff CLI.
+func (p *Provider) AvailableModels() []types.FreeModel {
+	out := make([]types.FreeModel, 0, len(freebuffPremiumCatalog)+len(freebuffStandardCatalog))
+	out = append(out, freebuffPremiumCatalog...)
+	out = append(out, freebuffStandardCatalog...)
+	return out
+}
+
+// IsConfigured returns nil iff a usable Freebuff bearer token is available.
 func (p *Provider) IsConfigured() error {
+	if p.cfg != nil {
+		if k, _, _, ok := p.cfg.Override("freebuff"); ok && strings.TrimSpace(k) != "" {
+			return nil
+		}
+	}
 	a := p.a
 	if a == nil {
 		var err error
@@ -78,21 +98,19 @@ func (p *Provider) IsConfigured() error {
 		}
 		p.a = a
 	}
-	if p.cfg != nil {
-		if k, _, _, ok := p.cfg.Override("freebuff"); ok && k != "" {
-			return nil
-		}
-	}
 	cred, err := a.FreebuffCredentials()
-	if err != nil || cred.Token == "" {
-		return fmt.Errorf("freebuff: %w (run `freebuff` once to authenticate)", err)
+	if err != nil || strings.TrimSpace(cred.Token) == "" {
+		if err == nil {
+			err = fmt.Errorf("empty auth token")
+		}
+		return fmt.Errorf("freebuff: %w (run `freebuff login` once to authenticate)", err)
 	}
 	return nil
 }
 
-// FetchUsage tries:
-//   1. GET https://freebuff.com/api/v1/session (server-side summary).
-//   2. Fallback: mark as available + show static models only.
+// FetchUsage reads the authenticated session snapshot. The GET endpoint does
+// not create, claim, end, or mutate a session; only the Freebuff CLI's POST
+// path claims the single session slot.
 func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 	a := p.a
 	if a == nil {
@@ -103,96 +121,320 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 		}
 		p.a = a
 	}
-	cred, err := a.FreebuffCredentials()
-	if err != nil {
-		if p.cfg != nil {
-			if k, _, _, ok := p.cfg.Override("freebuff"); ok {
-				cred = &auth.Credential{Token: k, Source: "config override"}
-			}
-		}
-		if cred == nil {
-			return &types.UsageStats{
-				LastProbeAt: time.Now(),
-				Error:       err.Error(),
-				Note:        "Freebuff requires `freebuff login` once to persist credentials",
-			}, nil
-		}
-	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://freebuff.com/api/v1/session", nil)
+	stats, err := p.fetchSession(ctx, a)
 	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+cred.Token)
-	req.Header.Set("User-Agent", p.probe.UserAgent)
-	resp, err := p.hc.Do(req)
-	if err != nil {
-		return &types.UsageStats{
-			LastProbeAt: time.Now(),
-			Error:       err.Error(),
-			Note:        "freebuff backend unreachable - showing static free-model list",
-		}, nil
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	if resp.StatusCode == http.StatusForbidden {
-		return &types.UsageStats{
-			LastProbeAt: time.Now(),
-			Error:       "free mode requires CLI auth (HTTP 403)",
-			Note:        "freebuff's API blocks direct calls; the CLI is the supported path",
-		}, nil
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return &types.UsageStats{
-			LastProbeAt: time.Now(),
-			Error:       "freebuff credentials rejected (HTTP 401) -- re-run `freebuff` to refresh",
-		}, nil
-	}
-	if resp.StatusCode >= 400 {
-		// Endpoint guess might be wrong -- fall back to the static
-		// free-models list and surface a soft hint rather than a raw
-		// HTTP error.
-		return &types.UsageStats{
-			LastProbeAt: time.Now(),
-			Note: fmt.Sprintf("freebuff backend returned HTTP %d; showing static free-models list only "+
-				"(body: %s)", resp.StatusCode, snippet(body)),
-		}, nil
-	}
-
-	var doc struct {
-		MessagesToday int       `json:"messages_today"`
-		MessagesLimit int       `json:"messages_limit"`
-		ResetAt       time.Time `json:"reset_at"`
-		Mode          string    `json:"mode"` // "full" or "limited"
-	}
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return &types.UsageStats{
-			LastProbeAt: time.Now(),
-			Error:       "freebuff backend response shape unrecognized",
-			Note:        fmt.Sprintf("body=%s", snippet(body)),
-		}, nil
-	}
-	stats := &types.UsageStats{
-		LastProbeAt: time.Now(),
-	}
-	if doc.MessagesLimit > 0 {
-		stats.Unit = types.UnitCount
-		stats.WindowLabel = "today"
-		stats.Used = float64(doc.MessagesToday)
-		stats.Total = float64(doc.MessagesLimit)
-		if !doc.ResetAt.IsZero() {
-			stats.ResetAt = doc.ResetAt
-		}
-	} else {
-		stats.Note = fmt.Sprintf("freebuff mode=%s; no numeric limit exposed", doc.Mode)
+		return offlineStats(a, err.Error()), nil
 	}
 	return stats, nil
 }
 
-func snippet(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	if len(s) > 120 {
-		return s[:120] + "…"
+func (p *Provider) endpointURL() string {
+	root := strings.TrimRight(p.endpointOverride, "/")
+	if root == "" {
+		root = "https://www.codebuff.com"
+	}
+	return root + sessionPath
+}
+
+func (p *Provider) fetchSession(ctx context.Context, a *auth.Finder) (*types.UsageStats, error) {
+	token := p.resolveToken(a)
+	if token == "" {
+		return offlineStats(a, "no Freebuff bearer token"), nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpointURL(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	if p.probe != nil && p.probe.UserAgent != "" {
+		req.Header.Set("User-Agent", p.probe.UserAgent)
+	}
+
+	resp, err := p.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if readErr != nil {
+		return nil, fmt.Errorf("freebuff session: read response: %w", readErr)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("freebuff session: HTTP %d: %s", resp.StatusCode, upstreamMessage(body))
+	}
+
+	env, err := parseSessionEnvelope(body)
+	if err != nil {
+		return nil, fmt.Errorf("freebuff session: parse: %w", err)
+	}
+	if env.ErrorStat != "" {
+		return nil, fmt.Errorf("freebuff session: %s", nonEmpty(env.Message, env.ErrorStat))
+	}
+	return renderSessionStats(env)
+}
+
+// sessionEnvelope mirrors the stable fields used by the official client. The
+// optional entitlementBreakdown is retained for server snapshots that expose
+// per-entitlement detail in addition to the shared model quota.
+type sessionEnvelope struct {
+	Status       string                      `json:"status"`
+	AccessTier   string                      `json:"accessTier"`
+	RateLimits   map[string]sessionRateLimit `json:"rateLimitsByModel"`
+	RateLimit    *sessionRateLimit           `json:"rateLimit"`
+	Model        string                      `json:"model"`
+	RemainingMs  float64                     `json:"remainingMs"`
+	CurrentModel string                      `json:"currentModel"`
+	CountryCode  string                      `json:"countryCode"`
+	CountryBlock string                      `json:"countryBlockReason"`
+	Referral     json.RawMessage             `json:"referral"`
+	ErrorStat    string                      `json:"error"`
+	Message      string                      `json:"message"`
+}
+
+type sessionRateLimit struct {
+	Model                string                     `json:"model"`
+	Limit                float64                    `json:"limit"`
+	RecentCount          float64                    `json:"recentCount"`
+	ResetAt              string                     `json:"resetAt"`
+	ResetTimeZone        string                     `json:"resetTimeZone"`
+	Period               string                     `json:"period"`
+	WindowHours          float64                    `json:"windowHours"`
+	EntitlementBreakdown map[string]json.RawMessage `json:"entitlementBreakdown"`
+}
+
+func parseSessionEnvelope(raw []byte) (sessionEnvelope, error) {
+	var env sessionEnvelope
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return env, fmt.Errorf("empty body")
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return env, err
+	}
+	return env, nil
+}
+
+func renderSessionStats(env sessionEnvelope) (*types.UsageStats, error) {
+	tier := strings.ToLower(strings.TrimSpace(env.AccessTier))
+	if tier != "full" && tier != "limited" {
+		return nil, fmt.Errorf("missing or unknown accessTier %q", env.AccessTier)
+	}
+
+	quota, err := chooseQuota(env, tier)
+	if err != nil {
+		return nil, err
+	}
+	if quota.Limit <= 0 || quota.RecentCount < 0 {
+		return nil, fmt.Errorf("invalid quota for %s: limit=%v recentCount=%v", tier, quota.Limit, quota.RecentCount)
+	}
+	reset, err := parseResetAt(quota.ResetAt)
+	if err != nil {
+		return nil, fmt.Errorf("invalid quota resetAt %q: %w", quota.ResetAt, err)
+	}
+
+	now := time.Now()
+	stats := &types.UsageStats{
+		Used:        quota.RecentCount,
+		Total:       quota.Limit,
+		Unit:        types.UnitCount,
+		WindowLabel: quotaWindowLabel(quota.Period, quota.ResetTimeZone),
+		ResetAt:     reset,
+		LastProbeAt: now,
+	}
+
+	status := strings.TrimSpace(env.Status)
+	note := []string{tierLabel(tier) + " session quota"}
+	if status != "" {
+		note = append(note, status)
+	}
+	if status == "active" && env.RemainingMs > 0 {
+		// remainingMs describes the active session's lifetime, not the daily
+		// session quota represented by Used/Total/ResetAt.
+		note = append(note, fmt.Sprintf("active session %.0fm remaining", env.RemainingMs/60000))
+	}
+	if env.Referral != nil && len(env.Referral) > 0 && string(env.Referral) != "null" {
+		note = append(note, "referral quota is separate")
+	}
+	stats.Note = strings.Join(note, " · ")
+	return stats, nil
+}
+
+func chooseQuota(env sessionEnvelope, tier string) (sessionRateLimit, error) {
+	if env.RateLimit != nil && validRateLimit(*env.RateLimit) {
+		return quotaForTier(*env.RateLimit, tier)
+	}
+
+	preferred := freebuffStandardIDs
+	if tier == "full" {
+		preferred = freebuffPremiumIDs
+	}
+	for _, id := range preferred {
+		if q, ok := env.RateLimits[id]; ok && validRateLimit(q) {
+			return quotaForTier(q, tier)
+		}
+	}
+
+	// The server may key an entry by an alias while still including its model.
+	for key, q := range env.RateLimits {
+		if !validRateLimit(q) {
+			continue
+		}
+		if isPreferredModel(key, q.Model, preferred) || strings.EqualFold(key, tier) || strings.EqualFold(key, "general") || strings.EqualFold(key, "limited") {
+			return quotaForTier(q, tier)
+		}
+	}
+	return sessionRateLimit{}, fmt.Errorf("missing rateLimitsByModel quota for %s access tier", tier)
+}
+
+func isPreferredModel(key, model string, preferred []string) bool {
+	for _, id := range preferred {
+		if key == id || model == id {
+			return true
+		}
+	}
+	return false
+}
+
+func quotaForTier(q sessionRateLimit, tier string) (sessionRateLimit, error) {
+	if len(q.EntitlementBreakdown) == 0 {
+		return q, nil
+	}
+	keys := []string{tier}
+	if tier == "full" {
+		keys = append(keys, "premium")
+	} else {
+		keys = append(keys, "standard", "general")
+	}
+	for _, key := range keys {
+		raw, ok := q.EntitlementBreakdown[key]
+		if !ok {
+			continue
+		}
+		var detail sessionRateLimit
+		if err := json.Unmarshal(raw, &detail); err != nil {
+			return sessionRateLimit{}, fmt.Errorf("invalid entitlementBreakdown.%s: %w", key, err)
+		}
+		if validRateLimit(detail) {
+			if detail.Model == "" {
+				detail.Model = q.Model
+			}
+			if detail.Period == "" {
+				detail.Period = q.Period
+			}
+			if detail.ResetTimeZone == "" {
+				detail.ResetTimeZone = q.ResetTimeZone
+			}
+			return detail, nil
+		}
+	}
+	return q, nil
+}
+
+func validRateLimit(q sessionRateLimit) bool {
+	return q.Limit > 0 && q.RecentCount >= 0
+}
+
+var freebuffPremiumIDs = []string{
+	"deepseek/deepseek-v4-pro",
+	"minimax/minimax-m3",
+	"openai/gpt-5.6-luna",
+	"mimo/mimo-v2.5-pro",
+}
+
+var freebuffStandardIDs = []string{
+	"deepseek/deepseek-v4-flash",
+	"mimo/mimo-v2.5",
+}
+
+func quotaWindowLabel(period, zone string) string {
+	period = strings.ToLower(strings.TrimSpace(period))
+	zone = strings.TrimSpace(zone)
+	if period == "pacific_day" || period == "daily" {
+		return "daily (Pacific)"
+	}
+	if period == "pacific_week" || period == "weekly" {
+		return "weekly (Pacific)"
+	}
+	if period != "" {
+		return period
+	}
+	if zone != "" {
+		return "daily (" + zone + ")"
+	}
+	return "daily"
+}
+
+func tierLabel(tier string) string {
+	if tier == "full" {
+		return "Premium"
+	}
+	return "Standard"
+}
+
+func parseResetAt(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("missing resetAt")
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("expected RFC3339 timestamp")
+}
+
+func (p *Provider) resolveToken(a *auth.Finder) string {
+	if p.cfg != nil {
+		if key, _, _, ok := p.cfg.Override("freebuff"); ok && strings.TrimSpace(key) != "" {
+			return strings.TrimSpace(key)
+		}
+	}
+	cred, err := a.FreebuffCredentials()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cred.Token)
+}
+
+func offlineStats(a *auth.Finder, reason string) *types.UsageStats {
+	note := "no live Freebuff session quota"
+	if reason != "" {
+		note += " (" + reason + ")"
+	}
+	if a != nil {
+		if name, email, ok := a.FreebuffAccount(); ok {
+			identity := name
+			if email != "" {
+				identity += " <" + email + ">"
+			}
+			note += " · account: " + identity
+		}
+	}
+	return &types.UsageStats{
+		Unit:        types.UnitCount,
+		WindowLabel: "daily (Pacific)",
+		LastProbeAt: time.Now(),
+		Note:        note + " · showing the static model catalog",
+		Error:       reason,
+	}
+}
+
+func upstreamMessage(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > 200 {
+		s = s[:200] + "..."
 	}
 	return s
+}
+
+func nonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -467,21 +468,59 @@ func (m *Model) renderDetail() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(sectionStyle.Render("Free models"))
-	b.WriteString("\n")
-	if len(s.FreeModels) == 0 {
-		b.WriteString(subStyle.Render("  (none)"))
-		b.WriteString("\n")
-	} else {
-		for _, fm := range s.FreeModels {
-			notes := ""
-			if fm.Notes != "" {
-				notes = subStyle.Render("  — " + fm.Notes)
-			}
-			b.WriteString(fmt.Sprintf("  • %s%s\n", fm.Label, notes))
+	renderModelSections(&b, s.FreeModels)
+	return b.String()
+}
+
+// renderModelSections splits s.FreeModels into Premium and Free blocks
+// using the FreeModel.Premium flag (default false) and renders each
+// block under a bold heading.
+//
+// We gate the "Premium models" header on len(premium) > 0 so providers
+// that never set the flag (Codex, Command Code, OpenCode Go, Cline
+// Pass) keep their historical single "Free models" block and don't
+// pick up a stray "(none on the current tier)" line above it.
+func renderModelSections(b *strings.Builder, models []types.FreeModel) {
+	var premium, free []types.FreeModel
+	for _, fm := range models {
+		if fm.Premium {
+			premium = append(premium, fm)
+		} else {
+			free = append(free, fm)
 		}
 	}
-	return b.String()
+
+	if len(premium) > 0 {
+		b.WriteString(sectionStyle.Render("Premium models"))
+		b.WriteString("\n")
+		for i := range premium {
+			writeModelRow(b, premium[i])
+		}
+		if len(free) > 0 {
+			b.WriteString("\n")
+		}
+	}
+
+	if len(free) > 0 {
+		label := "Free models"
+		if len(premium) > 0 {
+			label = "Standard models"
+		}
+		b.WriteString(sectionStyle.Render(label))
+		b.WriteString("\n")
+		for i := range free {
+			writeModelRow(b, free[i])
+		}
+	}
+}
+
+func writeModelRow(b *strings.Builder, fm types.FreeModel) {
+	if fm.Notes != "" {
+		notes := subStyle.Render("  — " + fm.Notes)
+		fmt.Fprintf(b, "  • %s%s\n", fm.Label, notes)
+		return
+	}
+	fmt.Fprintf(b, "  • %s\n", fm.Label)
 }
 
 func (m *Model) renderLog() string {
@@ -574,11 +613,11 @@ func humanFormat(u *types.UsageStats) string {
 	case types.UnitUSD:
 		return fmt.Sprintf("$%.2f", u.Used)
 	case types.UnitCount:
-		return fmt.Sprintf("%d", int(u.Used))
+		return formatNumber(u.Used)
 	case types.UnitTokens:
-		return fmt.Sprintf("%d tok", int(u.Used))
+		return formatNumber(u.Used) + " tok"
 	}
-	return fmt.Sprintf("%.0f", u.Used)
+	return formatNumber(u.Used)
 }
 
 func humanTotal(u *types.UsageStats) string {
@@ -589,11 +628,18 @@ func humanTotal(u *types.UsageStats) string {
 	case types.UnitUSD:
 		return fmt.Sprintf("$%.2f", u.Total)
 	case types.UnitCount:
-		return fmt.Sprintf("%d", int(u.Total))
+		return formatNumber(u.Total)
 	case types.UnitTokens:
-		return fmt.Sprintf("%d tok", int(u.Total))
+		return formatNumber(u.Total) + " tok"
 	}
-	return fmt.Sprintf("%.0f", u.Total)
+	return formatNumber(u.Total)
+}
+
+func formatNumber(value float64) string {
+	if value == float64(int64(value)) {
+		return strconv.FormatInt(int64(value), 10)
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 func humanReset(u *types.UsageStats) string {
