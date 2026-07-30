@@ -1,4 +1,4 @@
-// Package config loads (and writes) ~/.config/provider-usage/config.yaml.
+// Package config loads (and writes) ~/.config/plan-usage/config.yaml.
 package config
 
 import (
@@ -12,7 +12,7 @@ import (
 )
 
 // DefaultPath -- the conventional config location.
-const DefaultPath = ".config/provider-usage/config.yaml"
+const DefaultPath = ".config/plan-usage/config.yaml"
 
 // Config is the user-overridable configuration.
 type Config struct {
@@ -68,7 +68,7 @@ func (c *Config) Defaults() {
 			home, _ := os.UserHomeDir()
 			xdg = filepath.Join(home, ".local", "state")
 		}
-		c.StateDir = filepath.Join(xdg, "provider-usage")
+		c.StateDir = filepath.Join(xdg, "plan-usage")
 	}
 }
 

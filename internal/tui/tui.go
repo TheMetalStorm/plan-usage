@@ -10,11 +10,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/TheMetalStorm/provider-usage/internal/config"
-	"github.com/TheMetalStorm/provider-usage/internal/debug"
-	"github.com/TheMetalStorm/provider-usage/internal/providers"
-	"github.com/TheMetalStorm/provider-usage/internal/state"
-	"github.com/TheMetalStorm/provider-usage/internal/types"
+	"github.com/TheMetalStorm/plan-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/debug"
+	"github.com/TheMetalStorm/plan-usage/internal/providers"
+	"github.com/TheMetalStorm/plan-usage/internal/state"
+	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
 // Model is the bubbletea root model.
@@ -296,8 +296,8 @@ func loadItems(store *state.Store) []types.Snapshot {
 
 func sortByProvider(s []types.Snapshot) {
 	priority := map[string]int{
-		"opencode": 0, "opencodego": 1, "codex": 2,
-		"clinepass": 3, "commandcode": 4, "freebuff": 5,
+		"opencodego": 0, "codex": 1,
+		"clinepass": 2, "commandcode": 3, "freebuff": 4,
 	}
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && priority[s[j-1].Provider] > priority[s[j].Provider]; j-- {
@@ -345,7 +345,7 @@ func keyMatches(k tea.KeyMsg, want ...string) bool {
 
 func (m *Model) renderHeader() string {
 	age := time.Since(m.lastRefresh)
-	title := titleStyle.Render("provider-usage")
+	title := titleStyle.Render("plan-usage")
 	subtitle := subStyle.Render("multi-provider coding-plan monitor")
 	right := subStyle.Render(fmt.Sprintf("⟳ refreshed %s ago", shortDur(age)))
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(subtitle) - lipgloss.Width(right) - 6

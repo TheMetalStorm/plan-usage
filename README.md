@@ -1,4 +1,4 @@
-# provider-usage
+# plan-usage
 
 > **⚠️ WIP — This project is under active development and does not work yet.
 > Everything is a stub. Do not rely on it for anything.**
@@ -9,7 +9,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  provider-usage                 multi-provider coding-plan monitor   │
+│  plan-usage                 multi-provider coding-plan monitor   │
 ├──────────┬───────────────────────────────────────────────────────────┤
 │ ▸ OpenCode   ● 0%      │  OpenCode Zen                              │
 │   Codex      ▲ 75%     │  ████████████████░░░░░░░░░░░░  75% (5h)      │
@@ -30,11 +30,11 @@
 in your Polybar:
 
 ```
-[module/provider-usage]
+[module/plan-usage]
 type    = custom/script
-exec    = provider-usage polybar
+exec    = plan-usage polybar
 interval= 60
-click-left = provider-usage show
+click-left = plan-usage show
 format-prefix = " "
 ```
 
@@ -46,10 +46,10 @@ format-prefix = " "
 - **Hybrid auth**: zero-config if you already have the native CLI
   installed (`~/.codex/auth.json`, `~/.local/share/opencode/auth.json`,
   `~/.commandcode/auth.json`, `~/.config/manicode/credentials.json`,
-  VS Code / Cline global storage). Override via `~/.config/provider-usage/config.yaml`.
-- **Systemd-user-service** for always-fresh data; `provider-usage daemon` polls every
+  VS Code / Cline global storage). Override via `~/.config/plan-usage/config.yaml`.
+- **Systemd-user-service** for always-fresh data; `plan-usage daemon` polls every
   `refresh_interval` and writes a tiny `snapshot.json` to
-  `$XDG_STATE_HOME/provider-usage`.
+  `$XDG_STATE_HOME/plan-usage`.
 - **Debug mode** (`D` in the TUI or `--debug` flag) shows the last 64 log
   entries for every refresh attempt.
 - **Cheap probes**: each refresh sends a `max_tokens=1` no-op request —
@@ -58,17 +58,17 @@ format-prefix = " "
 ## 🚀 Install
 
 ```bash
-git clone https://github.com/TheMetalStorm/provider-usage
-cd provider-usage
-go build -o ~/.local/bin/provider-usage ./cmd/provider-usage
+git clone https://github.com/TheMetalStorm/plan-usage
+cd plan-usage
+go build -o ~/.local/bin/plan-usage ./cmd/plan-usage
 
 # system service (auto-start, restart on crash)
-provider-usage init system | sed "s|%h|$HOME|g" > ~/.config/systemd/user/provider-usage.service
+plan-usage init system | sed "s|%h|$HOME|g" > ~/.config/systemd/user/plan-usage.service
 systemctl --user daemon-reload
-systemctl --user enable --now provider-usage.service
+systemctl --user enable --now plan-usage.service
 
 # polybar snippet
-provider-usage init polybar >> ~/.config/polybar/config.ini
+plan-usage init polybar >> ~/.config/polybar/config.ini
 polybar msgcmd restart
 ```
 
@@ -76,21 +76,21 @@ polybar msgcmd restart
 
 | command              | what it does                                                         |
 |----------------------|----------------------------------------------------------------------|
-| `provider-usage show`         | open the interactive TUI                                             |
-| `provider-usage polybar`      | write one line for Polybar (reads the daemon-cached state file)      |
-| `provider-usage daemon`       | long-running poller; writes `$XDG_STATE_HOME/provider-usage/snapshot.json`    |
-| `provider-usage check [name]` | dump one (`name`) or the whole aggregate as JSON, on stdout          |
-| `provider-usage refresh`      | one-shot refresh cycle, writes the snapshot file                     |
-| `provider-usage init polybar` | print a polybar `custom/script` module snippet                       |
-| `provider-usage init system`  | print a `systemd --user` unit file                                   |
-| `provider-usage version`      | print version                                                        |
+| `plan-usage show`         | open the interactive TUI                                             |
+| `plan-usage polybar`      | write one line for Polybar (reads the daemon-cached state file)      |
+| `plan-usage daemon`       | long-running poller; writes `$XDG_STATE_HOME/plan-usage/snapshot.json`    |
+| `plan-usage check [name]` | dump one (`name`) or the whole aggregate as JSON, on stdout          |
+| `plan-usage refresh`      | one-shot refresh cycle, writes the snapshot file                     |
+| `plan-usage init polybar` | print a polybar `custom/script` module snippet                       |
+| `plan-usage init system`  | print a `systemd --user` unit file                                   |
+| `plan-usage version`      | print version                                                        |
 
 All subcommands accept `--config PATH`, `--state-dir PATH`, `--debug`,
 `--dry-run`.
 
 ## ⚙️ Config
 
-`~/.config/provider-usage/config.yaml`:
+`~/.config/plan-usage/config.yaml`:
 
 ```yaml
 providers:
@@ -115,15 +115,15 @@ debug: false
 
 ```
 ┌────────────────────┐    probe    ┌────────────────────┐
-│ provider-usage daemon       │ ──────────▶ │ OpenCode / Codex / │
+│ plan-usage daemon       │ ──────────▶ │ OpenCode / Codex / │
 │ (every 60s)        │             │ ClinePass /        │
 └────────────────────┘             │ CommandCode /      │
             │                       │ Freebuff           │
             ▼ atomically            └────────────────────┘
-   $XDG_STATE_HOME/provider-usage/snapshot.json
+   $XDG_STATE_HOME/plan-usage/snapshot.json
             │
-            ├──── provider-usage polybar  ──  reads file -> printf
-            └──── provider-usage show     ──  reads file + live probes
+            ├──── plan-usage polybar  ──  reads file -> printf
+            └──── plan-usage show     ──  reads file + live probes
 ```
 
 - The **TUI** never writes to `snapshot.json` -- the daemon is the single
@@ -160,7 +160,7 @@ and add it to `order`.
 
 ## 🛡️ Privacy & security
 
-`provider-usage` reads tokens from native CLI config files only when the user is
+`plan-usage` reads tokens from native CLI config files only when the user is
 already logged in. Tokens never appear in:
 - the state file (`snapshot.json`),
 - the polybar output,

@@ -28,4 +28,4 @@ go.work.sum
 
 # Local-only scratch state files (e.g. when running with --state-dir=/tmp/...)
 *.tmp
-/provider-usage
+/plan-usage

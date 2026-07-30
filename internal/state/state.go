@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TheMetalStorm/provider-usage/internal/types"
+	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
 // Store keeps a persistent snapshot of every provider's most recent state.
