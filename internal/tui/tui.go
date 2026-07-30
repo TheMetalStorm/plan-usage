@@ -124,11 +124,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case keyMatches(mm, "q", "ctrl+c"):
 			return m, tea.Quit
-		case keyMatches(mm, "left", "h"):
+		case keyMatches(mm, "up", "k"):
 			if m.selected > 0 {
 				m.selected--
 			}
-		case keyMatches(mm, "right", "l"):
+		case keyMatches(mm, "down", "j"):
 			if m.selected < len(m.items)-1 {
 				m.selected++
 			}
@@ -139,8 +139,51 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMatches(mm, "D"):
 			m.debug = !m.debug
 		}
+
+	case tea.MouseMsg:
+		return m, m.handleMouse(mm)
 	}
 	return m, nil
+}
+
+// handleMouse processes mouse events for the TUI.
+func (m *Model) handleMouse(mm tea.MouseMsg) tea.Cmd {
+	// Calculate the left panel width using the same logic as View()
+	listW := m.width / 4
+	if listW < 18 {
+		listW = 18
+	}
+
+	switch mm.Type {
+	case tea.MouseLeft:
+		// Click in the left panel (provider list).
+		// Layout (0-indexed Y):
+		//   Y=0: header
+		//   Y=1: panel top border
+		//   Y=2: "PROVIDERS" header
+		//   Y=3: blank line (margin-bottom from listHeaderStyle)
+		//   Y=4+: provider entries (2 lines each: name + age/probing)
+		if int(mm.X) < listW && int(mm.Y) >= 4 {
+			idx := (int(mm.Y) - 4) / 2
+			if idx < len(m.items) {
+				m.selected = idx
+			}
+			return nil
+		}
+
+	case tea.MouseWheelUp:
+		if m.selected > 0 {
+			m.selected--
+		}
+		return nil
+
+	case tea.MouseWheelDown:
+		if m.selected < len(m.items)-1 {
+			m.selected++
+		}
+		return nil
+	}
+	return nil
 }
 
 func (m *Model) View() string {
@@ -506,7 +549,7 @@ func (m *Model) renderLog() string {
 }
 
 func (m *Model) renderFooter() string {
-	parts := []string{"←/h →/l switch", "r refresh", "R refresh all", "D debug", "q quit"}
+	parts := []string{"↑/k ↓/j switch", "r refresh", "R refresh all", "D debug", "q quit"}
 	return subStyle.Render(strings.Join(parts, "   "))
 }
 
