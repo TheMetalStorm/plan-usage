@@ -573,6 +573,7 @@ func (m *Model) renderDetail(panelW int) string {
 					b.WriteString(row)
 					writeStyledLine(&b, subStyle, "    "+truncateDisplay(usages[i], detailW-4))
 				}
+				writeStyledLine(&b, subStyle, "    reset "+humanReset(&w))
 
 				if w.Note != "" {
 					// Note follows the fixed label/bar/percentage columns.
@@ -828,7 +829,7 @@ func humanReset(u *types.UsageStats) string {
 	if u.ResetIn > 0 {
 		return "in " + shortDur(u.ResetIn)
 	}
-	return "rolling"
+	return "unavailable"
 }
 
 func shortDur(d time.Duration) string {

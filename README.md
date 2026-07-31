@@ -20,8 +20,9 @@ ClinePass, CommandCode, and Freebuff. Choose the interactive TUI
 - **All enabled providers appear simultaneously** as vertically scrollable
   cards. Each card includes provider name/icon, status or authentication error,
   every usage window, progress, percent, used/total, reset information, notes,
-  and last update time. The tray deliberately shows **no provider selector and
-  no model/FreeModels list**.
+  last update time, and the free model catalog below the usage details when
+  one is available. Free model names wrap inside the popup. The tray
+  deliberately shows **no provider selector**.
 - **Refresh now** in the popup and tray context menu, with timer/manual refresh
   requests serialized so only one provider refresh runs at a time.
 - **Escape, focus loss, outside click, or another tray click** hides the popup.
@@ -147,8 +148,13 @@ debug: false
 
 The tray uses `enabled` and the provider configuration to decide which cards
 to show. A provider with missing credentials still gets its card and displays
-its authentication/status error. Models remain part of the TUI/provider data
-model but are completely ignored by the tray popup.
+its authentication/status error. Available models are read from the persisted
+snapshot and displayed below the usage windows; a refresh updates both the
+free model catalog and quota data. The Codebuff/Freebuff card additionally
+shows a separate **Premium models (free for 6h/day)** section because those
+models can be used within the daily free allowance. Premium-only entries for
+other providers are not shown in the tray. Reset timestamps are shown when a
+provider supplies them, with a clear unavailable marker otherwise.
 
 ## Architecture and privacy
 
