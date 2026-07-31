@@ -4,6 +4,7 @@ package types
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -105,4 +106,32 @@ type Snapshot struct {
 type Aggregate struct {
 	GeneratedAt time.Time           `json:"generated_at"`
 	Providers   map[string]Snapshot `json:"providers"`
+}
+
+// LooksLikeNetworkError reports whether err looks like a connectivity failure
+// that a VPN, proxy, or firewall typically causes (timeout, connection
+// refused, DNS failure, unreachable host, reset). It returns false for
+// non-network errors such as HTTP 401/403 or JSON parse failures, so callers
+// can distinguish "retrying may soon succeed once the network recovers" from a
+// permanent auth/config fault.
+func LooksLikeNetworkError(err string) bool {
+	if err == "" {
+		return false
+	}
+	s := strings.ToLower(err)
+	for _, needle := range []string{
+		"timeout",
+		"context deadline exceeded",
+		"connection refused",
+		"no such host",
+		"no route to host",
+		"network is unreachable",
+		"connection reset",
+		"dial tcp",
+	} {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
 }

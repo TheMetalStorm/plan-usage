@@ -3,6 +3,7 @@ package freebuff
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -206,6 +207,40 @@ func testFinder(t *testing.T) *auth.Finder {
 		t.Fatal(err)
 	}
 	return f
+}
+
+func TestNetworkFailureAddsVPNHint(t *testing.T) {
+	p := NewWith(testFinder(t), nil)
+	p.hc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial tcp: lookup www.codebuff.com: no such host")
+	})}
+	stats, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchUsage() error = %v", err)
+	}
+	if !strings.Contains(stats.Error, "no such host") {
+		t.Fatalf("Error = %q, want the underlying network reason", stats.Error)
+	}
+	if !strings.Contains(stats.Error, "VPN") {
+		t.Fatalf("Error = %q, want a VPN/proxy hint for a network failure", stats.Error)
+	}
+}
+
+func TestAuthFailureHasNoVPNHint(t *testing.T) {
+	p := NewWith(testFinder(t), nil)
+	p.hc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusUnauthorized, `{"error":"unauthorized"}`), nil
+	})}
+	stats, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchUsage() error = %v", err)
+	}
+	if !strings.Contains(stats.Error, "HTTP 401") {
+		t.Fatalf("Error = %q, want the HTTP 401 reason", stats.Error)
+	}
+	if strings.Contains(stats.Error, "VPN") {
+		t.Fatalf("Error = %q, an auth failure must not mention VPN", stats.Error)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

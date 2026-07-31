@@ -399,7 +399,21 @@ func (p *Provider) resolveToken(a *auth.Finder) string {
 	return strings.TrimSpace(cred.Token)
 }
 
+// networkBlockHint returns a concise, human-readable hint when reason looks
+// like a connectivity failure that a VPN or proxy typically causes. It
+// returns "" for auth/config faults so the card status stays focused on the
+// real cause and the tray's fast-retry loop does not hammer permanent errors.
+func networkBlockHint(reason string) string {
+	if !types.LooksLikeNetworkError(reason) {
+		return ""
+	}
+	return "a VPN or proxy may be blocking access · disable it and refresh"
+}
+
 func offlineStats(a *auth.Finder, reason string) *types.UsageStats {
+	if hint := networkBlockHint(reason); hint != "" {
+		reason = reason + " · " + hint
+	}
 	note := "no live Freebuff session quota"
 	if reason != "" {
 		note += " (" + reason + ")"
