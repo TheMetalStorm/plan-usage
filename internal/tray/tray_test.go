@@ -106,6 +106,29 @@ func TestPopupClickOutsideChecksAllEdges(t *testing.T) {
 	}
 }
 
+func TestPopupClickDebounced(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name  string
+		shown time.Time
+		now   time.Time
+		want  bool
+	}{
+		{"zero-shown-never-debounced", time.Time{}, now, false},
+		{"instant", now, now, true},
+		{"just-under-window", now, now.Add(popupClickDebounce - time.Millisecond), true},
+		{"at-window-boundary", now, now.Add(popupClickDebounce), false},
+		{"well-after", now, now.Add(5 * time.Second), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := popupClickDebounced(tc.shown, tc.now); got != tc.want {
+				t.Fatalf("popupClickDebounced(shown=%v, now=%v) = %v, want %v", tc.shown, tc.now, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPopupPositionClampsEveryMonitorEdge(t *testing.T) {
 	work := Rect{X: -1920, Y: 40, Width: 1920, Height: 1040}
 	cases := []struct {

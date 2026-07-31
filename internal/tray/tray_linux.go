@@ -7,14 +7,18 @@ package tray
 #include <stdint.h>
 #include <gtk/gtk.h>
 #include <gdk/gdk.h>
-static void plan_usage_grab_add(uintptr_t widget) {
+static int plan_usage_grab_add(uintptr_t widget) {
 	GtkWidget *gtk_widget = GTK_WIDGET((void *)widget);
 	GdkWindow *window = gtk_widget_get_window(gtk_widget);
-	if (window == NULL) return;
+	if (window == NULL) return -1;
 	GdkDisplay *display = gdk_window_get_display(window);
 	GdkSeat *seat = gdk_display_get_default_seat(display);
-	if (seat == NULL) return;
-	(void)gdk_seat_grab(seat, window, GDK_SEAT_CAPABILITY_ALL, TRUE, NULL, NULL, NULL, NULL);
+	if (seat == NULL) return -1;
+	GdkGrabStatus status = gdk_seat_grab(seat, window, GDK_SEAT_CAPABILITY_ALL, TRUE, NULL, NULL, NULL, NULL);
+	if (status != GDK_GRAB_SUCCESS) {
+		g_printerr("[plan-usage] seat grab failed: status=%d (0=success 1=already 2=invalid 3=frozen 4=not-viewable)\n", status);
+	}
+	return (int)status;
 }
 static void plan_usage_grab_remove(uintptr_t widget) {
 	GtkWidget *gtk_widget = GTK_WIDGET((void *)widget);
@@ -153,6 +157,7 @@ type popup struct {
 	gate       RefreshGate
 	rendered   []*gtk.Box
 	emptyLabel *gtk.Label
+	shownAt    time.Time
 	stopMu     sync.RWMutex
 	stopped    bool
 }
@@ -236,6 +241,12 @@ func newPopup(cfg *config.Config, poller *daemon.Daemon, store *state.Store, dis
 	window.Connect("focus-out-event", func(_ *gtk.Window, _ *gdk.Event) bool { p.hide(); return false })
 	window.Connect("button-press-event", func(_ *gtk.Window, event *gdk.Event) bool {
 		button := gdk.EventButtonNewFromEvent(event)
+		// The tray host can re-deliver the very click that opened the popup
+		// through the seat grab; without this guard the popup would close
+		// instantly. Ignore button presses within the debounce window.
+		if popupClickDebounced(p.shownAt, time.Now()) {
+			return true
+		}
 		width, height := p.window.GetSize()
 		if button.Button() == 1 && PopupClickOutside(button.X(), button.Y(), width, height) {
 			p.hide()
@@ -351,6 +362,7 @@ func workAreaAt(display *gdk.Display, x, y int) Rect {
 }
 
 func (p *popup) showAtPointer() {
+	p.shownAt = time.Now()
 	// Pointer position is best effort; a failure just opens the popup at the
 	// screen origin, still clamped into the inner rect.
 	var px, py int
@@ -373,7 +385,28 @@ func (p *popup) showAtPointer() {
 	px, py = PopupPosition(px+popupPointerOffset, py+popupPointerOffset, width, height, inner)
 	p.window.Move(px, py)
 	p.window.GrabFocus()
-	C.plan_usage_grab_add(C.uintptr_t(p.window.Native()))
+	p.grabSeatWithRetry()
+}
+
+// grabSeatWithRetry grabs the pointer/keyboard so outside clicks are routed
+// to the popup and can dismiss it. The grab can transiently fail with
+// GDK_GRAB_ALREADY_GRABBED while the SNI tray host is still processing the
+// icon click that opened the popup, so failures are retried a few times on
+// the GTK thread instead of leaving the popup permanently ungrabbed.
+func (p *popup) grabSeatWithRetry() {
+	const attempts = 6
+	var tryGrab func(attempt int)
+	tryGrab = func(attempt int) {
+		if C.plan_usage_grab_add(C.uintptr_t(p.window.Native())) == 0 {
+			return
+		}
+		if attempt < attempts {
+			time.AfterFunc(25*time.Millisecond, func() {
+				_ = p.runOnGTK(func() { tryGrab(attempt + 1) })
+			})
+		}
+	}
+	tryGrab(1)
 }
 
 func (p *popup) requestRefresh() {

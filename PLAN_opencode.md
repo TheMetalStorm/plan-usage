@@ -129,6 +129,8 @@ Files:
 
 **Verification:** `go build ./...`, `go test ./...` (all packages), and `go vet ./internal/tray/` pass.
 
+**Follow-up (outside-click dismiss robustness):** The user reported that clicking outside did not always dismiss the popup. End-to-end probing with xdotool on the real i3 + polybar + snixembed setup showed the seat grab normally routes outside clicks to the popup and hides it, but two intermittent failure modes existed: (1) the SNI tray host can re-deliver the icon click that *opened* the popup through the grab, closing it instantly; (2) the grab can transiently fail with `GDK_GRAB_ALREADY_GRABBED` while the host is still processing the icon click, leaving the popup ungrabbed (outside clicks then do nothing — the reported symptom). Fix: `showAtPointer()` stamps `shownAt`, the `button-press-event` handler ignores presses within a 200 ms debounce window (`popupClickDebounced`, pure + unit-tested), and `grabSeatWithRetry()` retries a failed seat grab up to 6 times on the GTK thread (25 ms apart) instead of giving up. Verified live: 6 consecutive open→outside-click cycles (bar, Firefox, other SNI icon, second-monitor bar/terminal, popup edge) all dismissed; zero grab failures logged.
+
 ## Out of scope
 
 - Browser cookie import (Chrome/Dia) — that's macOS-specific CodexBar functionality.

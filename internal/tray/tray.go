@@ -43,7 +43,19 @@ const (
 	// popupPointerOffset moves the popup away from the click point so it
 	// never covers the tray icon that opened it.
 	popupPointerOffset = 16
+	// popupClickDebounce ignores button presses arriving shortly after the
+	// popup opens. The SNI tray host can re-deliver the click that opened
+	// the popup through the seat grab; without the guard the popup closes
+	// instantly. The window is long enough to cover the host's re-delivery
+	// but short enough to not swallow deliberate dismissals.
+	popupClickDebounce = 200 * time.Millisecond
 )
+
+// popupClickDebounced reports whether a button press at now should be
+// ignored because it arrived too soon after the popup was shown at shownAt.
+func popupClickDebounced(shownAt, now time.Time) bool {
+	return now.Sub(shownAt) < popupClickDebounce
+}
 
 // ProviderCard is the complete representation rendered by the popup for one
 // enabled provider.
