@@ -106,6 +106,29 @@ func TestPopupClickOutsideChecksAllEdges(t *testing.T) {
 	}
 }
 
+func TestPopupClickDebounced(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name  string
+		shown time.Time
+		now   time.Time
+		want  bool
+	}{
+		{"zero-shown-never-debounced", time.Time{}, now, false},
+		{"instant", now, now, true},
+		{"just-under-window", now, now.Add(popupClickDebounce - time.Millisecond), true},
+		{"at-window-boundary", now, now.Add(popupClickDebounce), false},
+		{"well-after", now, now.Add(5 * time.Second), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := popupClickDebounced(tc.shown, tc.now); got != tc.want {
+				t.Fatalf("popupClickDebounced(shown=%v, now=%v) = %v, want %v", tc.shown, tc.now, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPopupPositionClampsEveryMonitorEdge(t *testing.T) {
 	work := Rect{X: -1920, Y: 40, Width: 1920, Height: 1040}
 	cases := []struct {
@@ -115,7 +138,7 @@ func TestPopupPositionClampsEveryMonitorEdge(t *testing.T) {
 		wantX, wantY int
 	}{
 		{"left-top", -2000, 0, -1920, 40},
-		{"right-bottom", 100, 2000, -1120, 320},
+		{"right-bottom", 100, 2000, work.X + work.Width - popupWidth, work.Y + work.Height - popupHeight},
 		{"inside", -1600, 200, -1600, 200},
 	}
 	for _, tc := range cases {
@@ -139,6 +162,93 @@ func TestPopupSizeFitsMonitorWorkarea(t *testing.T) {
 	width, height = popupSizeForWorkarea(popupWidth, popupHeight, work)
 	if width != popupWidth || height != popupHeight {
 		t.Fatalf("popupSizeForWorkarea() = (%d,%d), want (%d,%d)", width, height, popupWidth, popupHeight)
+	}
+}
+
+func TestPopupInnerRectShrinksByMargin(t *testing.T) {
+	work := Rect{X: 100, Y: 50, Width: 1920, Height: 1080}
+	inner := popupInnerRect(work)
+	want := Rect{X: 100 + popupEdgeMargin, Y: 50 + popupEdgeMargin, Width: 1920 - 2*popupEdgeMargin, Height: 1080 - 2*popupEdgeMargin}
+	if inner != want {
+		t.Fatalf("popupInnerRect() = %+v, want %+v", inner, want)
+	}
+}
+
+func TestPopupInnerRectDegenerateWorkArea(t *testing.T) {
+	// Tiny work areas must not go negative; zero width/height are allowed
+	// but the helpers must stay deterministic.
+	inner := popupInnerRect(Rect{Width: 10, Height: 10})
+	if inner.Width < 0 || inner.Height < 0 || inner.X < 0 || inner.Y < 0 {
+		t.Fatalf("popupInnerRect() = %+v, want non-negative", inner)
+	}
+	if inner := popupInnerRect(Rect{X: 5, Y: 5, Width: 100, Height: 100}); inner.Width != 100-2*popupEdgeMargin || inner.Height != 100-2*popupEdgeMargin {
+		t.Fatalf("popupInnerRect() = %+v, want shrunk by margin", inner)
+	}
+}
+
+func TestPopupSizeNeverExceedsInnerWorkarea(t *testing.T) {
+	// A default size larger than the usable monitor area must be clamped
+	// down to the inner rect so the popup can never be bigger than the
+	// monitor.
+	inner := popupInnerRect(Rect{Width: 1024, Height: 768}) // 960x704
+	width, height := popupSizeForWorkarea(popupWidth+200, popupHeight+200, inner)
+	if width != inner.Width || height != inner.Height {
+		t.Fatalf("popupSizeForWorkarea() = (%d,%d), want clamped to inner (%d,%d)", width, height, inner.Width, inner.Height)
+	}
+	// A fitting default stays unchanged and still fits inside the inner rect.
+	width, height = popupSizeForWorkarea(popupWidth, popupHeight, inner)
+	if width != popupWidth || height != popupHeight {
+		t.Fatalf("popupSizeForWorkarea() = (%d,%d), want (%d,%d)", width, height, popupWidth, popupHeight)
+	}
+	if width > inner.Width || height > inner.Height {
+		t.Fatalf("popup (%d,%d) exceeds inner (%d,%d)", width, height, inner.Width, inner.Height)
+	}
+}
+
+func TestPopupPositionWithOffsetStaysInsideWork(t *testing.T) {
+	inner := popupInnerRect(Rect{X: 0, Y: 0, Width: 1920, Height: 1080})
+	cases := []struct {
+		name     string
+		pointerX int
+		pointerY int
+	}{
+		{"tray corner", inner.X + inner.Width - 60, inner.Y + 30},
+		{"top-left", inner.X - 100, inner.Y - 100},
+		{"bottom-right", inner.X + inner.Width + 100, inner.Y + inner.Height + 100},
+		{"middle", inner.X + inner.Width/2, inner.Y + inner.Height/2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x, y := PopupPosition(tc.pointerX+popupPointerOffset, tc.pointerY+popupPointerOffset, popupWidth, popupHeight, inner)
+			if x < inner.X || y < inner.Y {
+				t.Fatalf("PopupPosition() = (%d,%d): outside inner top-left %+v", x, y, inner)
+			}
+			if x+popupWidth > inner.X+inner.Width {
+				t.Fatalf("PopupPosition() x=%d: popup right edge %d exceeds inner right edge %d", x, x+popupWidth, inner.X+inner.Width)
+			}
+			if y+popupHeight > inner.Y+inner.Height {
+				t.Fatalf("PopupPosition() y=%d: popup bottom edge %d exceeds inner bottom edge %d", y, y+popupHeight, inner.Y+inner.Height)
+			}
+		})
+	}
+}
+
+func TestClipBoundsUnbreakableText(t *testing.T) {
+	if got := clip("short", 10); got != "short" {
+		t.Fatalf("clip(short) = %q, want unchanged", got)
+	}
+	got := clip("claude-sonnet-4-5-20250929-superlongunbreakabletoken", 24)
+	if len([]rune(got)) != 25 || got[len(got)-3:] != "…" {
+		t.Fatalf("clip(long,24) = %q (runes=%d), want 24 runes + …", got, len([]rune(got)))
+	}
+	if got := clip("", 5); got != "" {
+		t.Fatalf("clip(\"\") = %q, want empty", got)
+	}
+	if got := clip("abc", 0); got != "" {
+		t.Fatalf("clip(abc,0) = %q, want empty", got)
+	}
+	if got := clip("ümlaut-zeichen", 5); len([]rune(got)) != 6 || got[len(got)-3:] != "…" {
+		t.Fatalf("clip(ümlaut,5) = %q (runes=%d), want 5 runes + …", got, len([]rune(got)))
 	}
 }
 

@@ -7,14 +7,18 @@ package tray
 #include <stdint.h>
 #include <gtk/gtk.h>
 #include <gdk/gdk.h>
-static void plan_usage_grab_add(uintptr_t widget) {
+static int plan_usage_grab_add(uintptr_t widget) {
 	GtkWidget *gtk_widget = GTK_WIDGET((void *)widget);
 	GdkWindow *window = gtk_widget_get_window(gtk_widget);
-	if (window == NULL) return;
+	if (window == NULL) return -1;
 	GdkDisplay *display = gdk_window_get_display(window);
 	GdkSeat *seat = gdk_display_get_default_seat(display);
-	if (seat == NULL) return;
-	(void)gdk_seat_grab(seat, window, GDK_SEAT_CAPABILITY_ALL, TRUE, NULL, NULL, NULL, NULL);
+	if (seat == NULL) return -1;
+	GdkGrabStatus status = gdk_seat_grab(seat, window, GDK_SEAT_CAPABILITY_ALL, TRUE, NULL, NULL, NULL, NULL);
+	if (status != GDK_GRAB_SUCCESS) {
+		g_printerr("[plan-usage] seat grab failed: status=%d (0=success 1=already 2=invalid 3=frozen 4=not-viewable)\n", status);
+	}
+	return (int)status;
 }
 static void plan_usage_grab_remove(uintptr_t widget) {
 	GtkWidget *gtk_widget = GTK_WIDGET((void *)widget);
@@ -43,6 +47,7 @@ import (
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
+	"github.com/gotk3/gotk3/pango"
 )
 
 const usageIconBase64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALUlEQVR42mP4TyFgABESCgZkYbIMMLpTAcZDyACYBnQ8SA3ApmjUgCFjACUAADUiaw93Ogv/AAAAAElFTkSuQmCC"
@@ -159,6 +164,7 @@ type popup struct {
 	gate       RefreshGate
 	rendered   []*gtk.Box
 	emptyLabel *gtk.Label
+	shownAt    time.Time
 	stopMu     sync.RWMutex
 	stopped    bool
 
@@ -246,6 +252,12 @@ func newPopup(cfg *config.Config, poller *daemon.Daemon, store *state.Store, dis
 	window.Connect("focus-out-event", func(_ *gtk.Window, _ *gdk.Event) bool { p.hide(); return false })
 	window.Connect("button-press-event", func(_ *gtk.Window, event *gdk.Event) bool {
 		button := gdk.EventButtonNewFromEvent(event)
+		// The tray host can re-deliver the very click that opened the popup
+		// through the seat grab; without this guard the popup would close
+		// instantly. Ignore button presses within the debounce window.
+		if popupClickDebounced(p.shownAt, time.Now()) {
+			return true
+		}
 		width, height := p.window.GetSize()
 		if button.Button() == 1 && PopupClickOutside(button.X(), button.Y(), width, height) {
 			p.hide()
@@ -340,41 +352,75 @@ func (p *popup) hide() {
 	p.window.Hide()
 }
 
+// workAreaAt returns the work area of the monitor under (x, y), falling
+// back to the primary monitor's full geometry when no monitor can be
+// determined so the popup is still size- and position-clamped. On X11 GDK's
+// work area comes from _NET_WORKAREA, which i3 never sets, so it equals the
+// full monitor geometry; popupInnerRect's margin is what keeps screen edges
+// (and an edge-positioned tray bar) clear.
+func workAreaAt(display *gdk.Display, x, y int) Rect {
+	monitor, err := display.GetMonitorAtPoint(x, y)
+	if err == nil && monitor != nil {
+		wa := monitor.GetWorkarea()
+		return Rect{X: wa.GetX(), Y: wa.GetY(), Width: wa.GetWidth(), Height: wa.GetHeight()}
+	}
+	monitor, err = display.GetMonitor(0)
+	if err == nil && monitor != nil {
+		geo := monitor.GetGeometry()
+		return Rect{X: geo.GetX(), Y: geo.GetY(), Width: geo.GetWidth(), Height: geo.GetHeight()}
+	}
+	return Rect{}
+}
+
 func (p *popup) showAtPointer() {
+	p.shownAt = time.Now()
 	// Opening the popup always fetches fresh data, so a disabled VPN is
 	// detected immediately instead of only after the periodic timer fires.
 	defer p.requestRefresh()
-	seat, err := p.display.GetDefaultSeat()
-	if err != nil {
-		p.window.ShowAll()
-		return
+	// Pointer position is best effort; a failure just opens the popup at the
+	// screen origin, still clamped into the inner rect.
+	var px, py int
+	if seat, err := p.display.GetDefaultSeat(); err == nil {
+		if pointer, err := seat.GetPointer(); err == nil {
+			var screen *gdk.Screen
+			_ = pointer.GetPosition(&screen, &px, &py)
+		}
 	}
-	pointer, err := seat.GetPointer()
-	if err != nil {
-		p.window.ShowAll()
-		return
-	}
-	var screen *gdk.Screen
-	x, y := 0, 0
-	if err := pointer.GetPosition(&screen, &x, &y); err != nil {
-		p.window.ShowAll()
-		return
-	}
+	work := workAreaAt(p.display, px, py)
+	inner := popupInnerRect(work)
+
 	p.window.ShowAll()
 	width, height := p.window.GetSize()
-	monitor, err := p.display.GetMonitorAtPoint(x, y)
-	if err != nil || monitor == nil {
-		p.window.Move(x, y)
-		return
-	}
-	work := monitor.GetWorkarea()
-	workRect := Rect{X: work.GetX(), Y: work.GetY(), Width: work.GetWidth(), Height: work.GetHeight()}
-	width, height = popupSizeForWorkarea(width, height, workRect)
+	width, height = popupSizeForWorkarea(width, height, inner)
 	p.window.Resize(width, height)
-	px, py := PopupPosition(x, y, width, height, workRect)
+
+	// Open below/right of the click point so the popup never sits on top of
+	// the tray icon; PopupPosition clamps it into the inner rect.
+	px, py = PopupPosition(px+popupPointerOffset, py+popupPointerOffset, width, height, inner)
 	p.window.Move(px, py)
 	p.window.GrabFocus()
-	C.plan_usage_grab_add(C.uintptr_t(p.window.Native()))
+	p.grabSeatWithRetry()
+}
+
+// grabSeatWithRetry grabs the pointer/keyboard so outside clicks are routed
+// to the popup and can dismiss it. The grab can transiently fail with
+// GDK_GRAB_ALREADY_GRABBED while the SNI tray host is still processing the
+// icon click that opened the popup, so failures are retried a few times on
+// the GTK thread instead of leaving the popup permanently ungrabbed.
+func (p *popup) grabSeatWithRetry() {
+	const attempts = 6
+	var tryGrab func(attempt int)
+	tryGrab = func(attempt int) {
+		if C.plan_usage_grab_add(C.uintptr_t(p.window.Native())) == 0 {
+			return
+		}
+		if attempt < attempts {
+			time.AfterFunc(25*time.Millisecond, func() {
+				_ = p.runOnGTK(func() { tryGrab(attempt + 1) })
+			})
+		}
+	}
+	tryGrab(1)
 }
 
 func (p *popup) requestRefresh() {
@@ -476,12 +522,16 @@ func renderCard(card ProviderCard) *gtk.Box {
 	title, _ := gtk.LabelNew("")
 	title.SetHAlign(gtk.ALIGN_START)
 	title.SetName("card-title")
+	title.SetMaxWidthChars(popupCardTitleMaxChars)
+	title.SetEllipsize(pango.ELLIPSIZE_END)
 	title.SetMarkup(fmt.Sprintf("<b>%s  %s</b>", escapeMarkup(card.Icon), escapeMarkup(card.DisplayName)))
 	box.PackStart(title, false, false, 0)
 
 	status, _ := gtk.LabelNew("")
 	status.SetHAlign(gtk.ALIGN_START)
 	status.SetLineWrap(true)
+	status.SetMaxWidthChars(popupLineMaxChars)
+	status.SetEllipsize(pango.ELLIPSIZE_END)
 	status.SetName("card-status")
 	status.SetMarkup(escapeMarkup(card.Status))
 	box.PackStart(status, false, false, 0)
@@ -504,6 +554,8 @@ func renderCard(card ProviderCard) *gtk.Box {
 		label, _ := gtk.LabelNew(fmt.Sprintf("%s  %.0f%%  %s / %s", window.Label, window.Percent, window.Used, window.Total))
 		label.SetHAlign(gtk.ALIGN_START)
 		label.SetLineWrap(true)
+		label.SetMaxWidthChars(popupLineMaxChars)
+		label.SetEllipsize(pango.ELLIPSIZE_END)
 		label.SetName("usage-line")
 		usageBox.PackStart(label, false, false, 0)
 		bar, _ := gtk.ProgressBarNew()
@@ -515,6 +567,8 @@ func renderCard(card ProviderCard) *gtk.Box {
 		meta, _ := gtk.LabelNew(fmt.Sprintf("%s%s", window.Reset, noteSuffix(window.Note)))
 		meta.SetHAlign(gtk.ALIGN_START)
 		meta.SetLineWrap(true)
+		meta.SetMaxWidthChars(popupLineMaxChars)
+		meta.SetEllipsize(pango.ELLIPSIZE_END)
 		meta.SetName("usage-meta")
 		usageBox.PackStart(meta, false, false, 0)
 	}
@@ -538,6 +592,9 @@ func renderCard(card ProviderCard) *gtk.Box {
 
 	updated, _ := gtk.LabelNew(card.Updated)
 	updated.SetHAlign(gtk.ALIGN_START)
+	updated.SetMaxWidthChars(popupLineMaxChars)
+	updated.SetLineWrap(true)
+	updated.SetEllipsize(pango.ELLIPSIZE_END)
 	updated.SetName("updated")
 	box.PackStart(updated, false, false, 0)
 	return box
@@ -559,10 +616,11 @@ func appendModelSection(parent *gtk.Box, heading string, models []types.FreeMode
 		if model.Notes != "" {
 			name += " · " + model.Notes
 		}
-		item, _ := gtk.LabelNew("• " + name)
+		item, _ := gtk.LabelNew("• " + clip(name, popupModelMaxChars))
 		item.SetHAlign(gtk.ALIGN_START)
 		item.SetLineWrap(true)
 		item.SetMaxWidthChars(popupModelMaxChars)
+		item.SetEllipsize(pango.ELLIPSIZE_END)
 		item.SetName("free-model")
 		parent.PackStart(item, false, false, 0)
 	}
