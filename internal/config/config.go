@@ -23,7 +23,6 @@ type Config struct {
 	Enabled        []string                  `yaml:"enabled"` // optional allowlist
 	RefreshEvery   time.Duration             `yaml:"refresh_interval"`
 	ProbeMaxTokens int                       `yaml:"probe_max_tokens"`
-	Polybar        PolybarConfig             `yaml:"polybar"`
 	StateDir       string                    `yaml:"state_dir"`
 	Debug          bool                      `yaml:"debug"`
 	DryRun         bool                      `yaml:"dry_run"`
@@ -37,14 +36,6 @@ type ProviderConfig struct {
 	Token    string `yaml:"token"`
 }
 
-// PolybarConfig controls the polybar-widget formatting.
-type PolybarConfig struct {
-	Format       string `yaml:"format"`
-	Separator    string `yaml:"separator"`
-	HideIfNoAuth bool   `yaml:"hide_if_no_auth"`
-	NoAuthText   string `yaml:"no_auth_text"`
-}
-
 // Defaults applies sane defaults to zero-valued fields.
 func (c *Config) Defaults() {
 	if c.RefreshEvery == 0 {
@@ -55,15 +46,6 @@ func (c *Config) Defaults() {
 	}
 	if c.ProbeMaxTokens == 0 {
 		c.ProbeMaxTokens = 1
-	}
-	if c.Polybar.Format == "" {
-		c.Polybar.Format = "{icon} {name} {percent}%"
-	}
-	if c.Polybar.Separator == "" {
-		c.Polybar.Separator = " · "
-	}
-	if c.Polybar.NoAuthText == "" {
-		c.Polybar.NoAuthText = "—"
 	}
 	if c.StateDir == "" {
 		xdg := os.Getenv("XDG_STATE_HOME")

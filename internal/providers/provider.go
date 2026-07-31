@@ -1,5 +1,5 @@
 // Package providers aggregates every provider implementation and exposes
-// a stable registry used by the TUI, daemon and polybar widget.
+// a stable registry used by the TUI, daemon and tray popup.
 package providers
 
 import (
@@ -22,7 +22,7 @@ var (
 	builders = map[string]Builder{}
 )
 
-// order defines the canonical iteration order (UI / polybar / daemon).
+// order defines the canonical iteration order (UI / daemon / tray).
 var order = []string{
 	"opencodego",
 	"codex",
@@ -117,7 +117,7 @@ func EnrichWindows(p types.Provider, snap *types.Snapshot) {
 }
 
 // init registers every provider implementation.  Runs at package load
-// time; the order above defines the canonical UI / polybar / daemon
+// time; the order above defines the canonical UI / daemon / tray
 // iteration sequence.
 func init() {
 	Register("opencodego", func() (types.Provider, error) { return opencodego.New(), nil })

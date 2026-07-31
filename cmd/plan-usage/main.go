@@ -1,5 +1,5 @@
-// Command plan-usage is a multi-provider coding-plan usage monitor with a
-// Polybar widget and an interactive TUI dashboard.
+// Command plan-usage is a multi-provider coding-plan usage monitor with
+// an interactive TUI dashboard and a native system-tray popup.
 //
 // Global flags (--config, --state-dir, --debug, --dry-run) may appear
 // ANYWHERE on the command line; the first non-flag positional determines
@@ -9,12 +9,6 @@
 //
 //	plan-usage show              open the TUI dashboard
 //	plan-usage tray              run the native system-tray popup
-//	plan-usage polybar           one-line widget for polybar
-//	plan-usage daemon            long-running poller (writes state file)
-//	plan-usage check [provider]  dump a single provider's snapshot as JSON
-//	plan-usage refresh           refresh every enabled provider once
-//	plan-usage init polybar      write an example polybar snippet to stdout
-//	plan-usage init system       write a systemd --user unit file to stdout
 //	plan-usage version           print version info
 package main
 
@@ -59,18 +53,6 @@ func run(args []string, stdout, stderr *os.File) int {
 			return 1
 		}
 		return 0
-
-	case "polybar":
-		return errInt(runPolybar(cfg))
-
-	case "daemon", "serve":
-		return errInt(runDaemon(cfg))
-
-	case "check":
-		return errInt(runCheck(cfg, scanned.cmdArgs))
-
-	case "refresh":
-		return errInt(runRefresh(cfg))
 
 	case "init":
 		return runInitStatus(scanned.cmdArgs, stdout, stderr)
@@ -210,12 +192,6 @@ func usageTo(w io.Writer) {
 subcommands:
   show           open the interactive TUI dashboard
   tray           run the native system-tray popup
-  polybar        one-line polybar output (read from disk)
-  daemon         long-running poller, refreshes the state file
-  check [name]   dump a single provider snapshot as JSON
-  refresh        trigger one refresh cycle and exit
-  init polybar   write a polybar config snippet
-  init system    write a systemd --user unit file
   version        print version and exit
 
 flags: --config PATH, --state-dir PATH, --debug, --dry-run

@@ -1,5 +1,5 @@
 // Package daemon runs the background poller that keeps the state file
-// fresh for polybar and the TUI.
+// fresh for the tray popup and the TUI.
 //
 // One goroutine per enabled provider fetches concurrently and writes the
 // aggregate snapshot atomically.  The daemon is resilient to a single

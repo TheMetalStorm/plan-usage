@@ -1,5 +1,5 @@
 // Package state stores the most recent usage snapshots on disk so that
-// the polybar tick and the initial TUI render do not block on I/O.
+// the TUI render and tray popup do not block on I/O.
 package state
 
 import (

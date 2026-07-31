@@ -1,5 +1,5 @@
 // Package types contains the core data model shared across providers,
-// the daemon, the TUI and the polybar widget.
+// the daemon, the TUI and the tray popup.
 package types
 
 import (
@@ -13,7 +13,7 @@ type Provider interface {
 	Name() string
 	// DisplayName returns a human-friendly label.
 	DisplayName() string
-	// Icon returns a short glyph for use in the TUI / polybar.
+	// Icon returns a short glyph for use in the TUI / tray.
 	Icon() string
 	// IsConfigured returns nil iff credentials are available to attempt a
 	// probe. It must NOT perform any network I/O.
