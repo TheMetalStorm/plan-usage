@@ -1,7 +1,8 @@
 // Package format implements the polybar format-string mini-language.
 //
 // Tokens: {name} {display} {icon} {percent} {used} {total} {unit}
-//         {window} {reset_human} {error} {sep} {source}
+//
+//	{window} {reset_human} {error} {sep} {source}
 package format
 
 import (
@@ -15,19 +16,19 @@ import (
 // Token expansion happens per-provider.  Empty fields are substituted with
 // the alternative text (configurable).
 type Vars struct {
-	Name         string
-	Display      string
-	Icon         string
-	Percent      float64
-	Used         float64
-	Total        float64
-	Unit         string
-	Window       string
-	ResetHuman   string
-	Error        string
-	Source       string
-	EmptyText    string
-	NowLabel     string
+	Name       string
+	Display    string
+	Icon       string
+	Percent    float64
+	Used       float64
+	Total      float64
+	Unit       string
+	Window     string
+	ResetHuman string
+	Error      string
+	Source     string
+	EmptyText  string
+	NowLabel   string
 }
 
 // FromSnapshot builds Vars from a snapshot.
@@ -38,7 +39,7 @@ func FromSnapshot(s types.Snapshot, emptyText string) Vars {
 		Icon:       s.Icon,
 		EmptyText:  emptyText,
 		Window:     "",
-		ResetHuman: "—",
+		ResetHuman: "unavailable",
 	}
 	if s.Err != "" {
 		v.Error = s.Err
@@ -156,15 +157,31 @@ func formatFloat(f float64) string {
 	return fmt.Sprintf("%.0f", f)
 }
 
-// compactWindows renders " 5h:0% wk:0% mo:0%" from the windows list.
-// Used by Aggregate() to append a suffix for multi-window providers
-// (e.g. OpenCode Go).
+// compactWindows renders each extra window with its pressure and reset,
+// for example " 5h:0% (reset in 2h) weekly:0% (reset in 3d)".
 func compactWindows(ws []types.UsageStats) string {
-	out := ""
+	var out strings.Builder
 	for _, w := range ws {
-		out += fmt.Sprintf(" %s:%d%%", w.WindowLabel, int(w.Percent()))
+		fmt.Fprintf(&out, " %s:%d%% (reset %s)", emptyWindowLabel(w.WindowLabel), int(w.Percent()), resetHuman(w))
 	}
-	return out
+	return out.String()
+}
+
+func emptyWindowLabel(label string) string {
+	if label == "" {
+		return "rolling"
+	}
+	return label
+}
+
+func resetHuman(u types.UsageStats) string {
+	if !u.ResetAt.IsZero() {
+		return "in " + humanDuration(time.Until(u.ResetAt))
+	}
+	if u.ResetIn > 0 {
+		return "in " + humanDuration(u.ResetIn)
+	}
+	return "unknown"
 }
 
 // Aggregate renders the polybar widget line from a state aggregate.
@@ -187,7 +204,12 @@ func Aggregate(agg types.Aggregate, perProviderTmpl, separator, noAuthText strin
 			continue
 		}
 		base := Render(perProviderTmpl, vars)
-		// Append compact window summary for multi-window providers.
+		// Keep reset information visible in the default compact widget too,
+		// while respecting custom formats that already request the token.
+		if s.Usage != nil && !strings.Contains(perProviderTmpl, "{reset_human}") {
+			base += " (reset " + vars.ResetHuman + ")"
+		}
+		// Append every multi-window summary, including each known reset.
 		if len(s.Windows) > 1 {
 			base += compactWindows(s.Windows)
 		}

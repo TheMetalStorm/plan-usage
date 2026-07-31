@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +19,19 @@ import (
 	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
-const windowTitle = "plan-usage"
+const (
+	windowTitle        = "plan-usage"
+	popupWidth         = 1120
+	popupHeight        = 760
+	popupGridColumns   = 4
+	popupBorder        = 8
+	popupSpacing       = 6
+	popupCardSpacing   = 4
+	popupModelMaxChars = 48
+)
 
-// ProviderCard is the complete, model-free representation rendered by the
-// popup for one enabled provider.
+// ProviderCard is the complete representation rendered by the popup for one
+// enabled provider.
 type ProviderCard struct {
 	Name        string
 	DisplayName string
@@ -30,6 +40,7 @@ type ProviderCard struct {
 	Error       string
 	Updated     string
 	Windows     []WindowCard
+	Models      []types.FreeModel
 }
 
 // WindowCard is one quota window shown inside a provider card.
@@ -60,7 +71,9 @@ func (g *RefreshGate) End() { g.mu.Unlock() }
 
 // BuildCards returns one card for every enabled provider, in registry order.
 // Missing snapshots are retained as cards so an unavailable provider is never
-// silently omitted from the popup. FreeModels is intentionally not consulted.
+// silently omitted from the popup. The model catalog is copied into the card
+// even when usage data is unavailable, so users can still see the plan's
+// available models while fixing authentication.
 func BuildCards(cfg *config.Config, agg types.Aggregate) []ProviderCard {
 	if cfg == nil {
 		return nil
@@ -76,6 +89,7 @@ func BuildCards(cfg *config.Config, agg types.Aggregate) []ProviderCard {
 			DisplayName: snap.DisplayName,
 			Icon:        snap.Icon,
 			Updated:     formatUpdated(snap.RefreshedAt),
+			Models:      append([]types.FreeModel(nil), snap.FreeModels...),
 		}
 		if card.DisplayName == "" {
 			if p, err := providers.Get(name); err == nil {
@@ -108,6 +122,26 @@ func BuildCards(cfg *config.Config, agg types.Aggregate) []ProviderCard {
 	return cards
 }
 
+func freeModelsOnly(models []types.FreeModel) []types.FreeModel {
+	out := make([]types.FreeModel, 0, len(models))
+	for _, model := range models {
+		if !model.Premium {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+func premiumModelsOnly(models []types.FreeModel) []types.FreeModel {
+	out := make([]types.FreeModel, 0, len(models))
+	for _, model := range models {
+		if model.Premium {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
 func windowCard(u types.UsageStats) WindowCard {
 	return WindowCard{
 		Label:   nonEmpty(u.WindowLabel, "rolling"),
@@ -126,7 +160,7 @@ func resetText(u types.UsageStats) string {
 	if u.ResetIn > 0 {
 		return "resets " + durationText(u.ResetIn)
 	}
-	return "rolling reset"
+	return "reset time unavailable"
 }
 
 func durationText(d time.Duration) string {
@@ -154,6 +188,24 @@ func formatUpdated(t time.Time) string {
 		age = 0
 	}
 	return "Last update: " + durationText(age) + " ago"
+}
+
+// popupGridPosition returns the zero-based grid position for a provider card.
+func popupGridPosition(index int) (column, row int) {
+	if index < 0 {
+		return 0, 0
+	}
+	return index % popupGridColumns, index / popupGridColumns
+}
+
+func popupSizeForWorkarea(width, height int, work Rect) (int, int) {
+	if work.Width > 0 && width > work.Width {
+		width = work.Width
+	}
+	if work.Height > 0 && height > work.Height {
+		height = work.Height
+	}
+	return width, height
 }
 
 // PopupClickOutside reports whether local popup coordinates fall outside the
@@ -218,9 +270,9 @@ func humanValue(s types.UsageStats) string {
 	case types.UnitUSD:
 		return fmt.Sprintf("$%.2f", s.Used)
 	case types.UnitTokens:
-		return fmt.Sprintf("%.0f tokens", s.Used)
+		return formatUsageAmount(s.Used) + " tokens"
 	case types.UnitCount:
-		return fmt.Sprintf("%.0f requests", s.Used)
+		return formatUsageAmount(s.Used) + " requests"
 	default:
 		return fmt.Sprintf("%.2f", s.Used)
 	}
@@ -234,12 +286,19 @@ func humanTotal(s types.UsageStats) string {
 	case types.UnitUSD:
 		return fmt.Sprintf("$%.2f", s.Total)
 	case types.UnitTokens:
-		return fmt.Sprintf("%.0f tokens", s.Total)
+		return formatUsageAmount(s.Total) + " tokens"
 	case types.UnitCount:
-		return fmt.Sprintf("%.0f requests", s.Total)
+		return formatUsageAmount(s.Total) + " requests"
 	default:
 		return fmt.Sprintf("%.2f", s.Total)
 	}
+}
+
+// formatUsageAmount keeps fractional session counts visible. Rounding a
+// nearly-full quota such as 5.9/6 up to 6/6 hides that another session may
+// still be available.
+func formatUsageAmount(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 func nonEmpty(value, fallback string) string {

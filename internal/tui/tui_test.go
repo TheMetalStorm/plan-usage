@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -34,10 +35,19 @@ func TestRenderModelSectionsKeepsLegacySingleBlock(t *testing.T) {
 }
 
 func TestHumanFormatPreservesFractionalSessionUnits(t *testing.T) {
-	stats := &types.UsageStats{Used: 3.6, Total: 6, Unit: types.UnitCount}
-	if got := humanFormat(stats); got != "3.6" {
-		t.Fatalf("humanFormat(3.6) = %q, want 3.6", got)
+	for _, tc := range []struct {
+		used float64
+		want string
+	}{
+		{used: 3.6, want: "3.6"},
+		{used: 5.9, want: "5.9"},
+	} {
+		stats := &types.UsageStats{Used: tc.used, Total: 6, Unit: types.UnitCount}
+		if got := humanFormat(stats); got != tc.want {
+			t.Fatalf("humanFormat(%v) = %q, want %q", tc.used, got, tc.want)
+		}
 	}
+	stats := &types.UsageStats{Used: 5.9, Total: 6, Unit: types.UnitCount}
 	if got := humanTotal(stats); got != "6" {
 		t.Fatalf("humanTotal(6) = %q, want 6", got)
 	}
@@ -69,9 +79,9 @@ func TestMultiWindowColumnsStayAlignedWhenNarrow(t *testing.T) {
 			Provider:    "commandcode",
 			DisplayName: "Command Code",
 			Windows: []types.UsageStats{
-				{WindowLabel: "5h rolling", Used: 1, Total: 10, Unit: types.UnitUSD},
-				{WindowLabel: "weekly", Used: 2, Total: 10, Unit: types.UnitUSD},
-				{WindowLabel: "monthly", Used: 3, Total: 10, Unit: types.UnitUSD},
+				{WindowLabel: "5h rolling", Used: 1, Total: 10, Unit: types.UnitUSD, ResetIn: time.Hour},
+				{WindowLabel: "weekly", Used: 2, Total: 10, Unit: types.UnitUSD, ResetIn: 2 * time.Hour},
+				{WindowLabel: "monthly", Used: 3, Total: 10, Unit: types.UnitUSD, ResetIn: 3 * time.Hour},
 			},
 		}},
 	}
@@ -103,6 +113,11 @@ func TestMultiWindowColumnsStayAlignedWhenNarrow(t *testing.T) {
 	}
 	if len(barStarts) != 3 || len(pctStarts) != 3 {
 		t.Fatalf("found %d bar starts and %d percentage starts, want 3 each", len(barStarts), len(pctStarts))
+	}
+	for _, want := range []string{"reset in 1h", "reset in 2h", "reset in 3h"} {
+		if !strings.Contains(ansi.Strip(m.renderDetail(panelW)), want) {
+			t.Errorf("multi-window detail is missing %q", want)
+		}
 	}
 	for i := 1; i < 3; i++ {
 		if barStarts[i] != barStarts[0] {
