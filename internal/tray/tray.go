@@ -392,3 +392,42 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+// aggregateHasNetworkError reports whether any provider snapshot in agg has a
+// connectivity-class error (timeout, refused, DNS, …). The tray uses it to
+// retry faster while a VPN/proxy is likely blocking access, and to stop the
+// accelerated retry once every provider has recovered or only permanent
+// auth/config errors remain.
+func aggregateHasNetworkError(agg types.Aggregate) bool {
+	for _, snap := range agg.Providers {
+		if types.LooksLikeNetworkError(snap.Err) {
+			return true
+		}
+	}
+	return false
+}
+
+// blockedTooltipText returns a tray tooltip that names the providers whose
+// snapshots look network-blocked, or "" when none do (so the caller restores
+// the default tooltip). Providers are iterated in stable registry order.
+func blockedTooltipText(agg types.Aggregate) string {
+	var blocked []string
+	for _, name := range providers.AllNames() {
+		snap, ok := agg.Providers[name]
+		if !ok {
+			continue
+		}
+		if !types.LooksLikeNetworkError(snap.Err) {
+			continue
+		}
+		display := snap.DisplayName
+		if display == "" {
+			display = name
+		}
+		blocked = append(blocked, display)
+	}
+	if len(blocked) == 0 {
+		return ""
+	}
+	return "plan-usage: " + strings.Join(blocked, ", ") + " · VPN/proxy may be blocking access"
+}
