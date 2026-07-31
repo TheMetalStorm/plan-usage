@@ -3,14 +3,17 @@
 > **⚠️ WIP — This project is under active development.**
 
 Multi-provider coding-plan usage monitor for OpenCode, Codex / ChatGPT,
-ClinePass, CommandCode, and Freebuff. Use the existing TUI or Polybar widget,
-or run a native Linux system-tray popup that shows every enabled provider at
-once.
+ClinePass, CommandCode, and Freebuff. Choose the interactive TUI
+(`plan-usage show`) or the native Linux system-tray popup
+(`plan-usage tray`) to view all enabled providers at once.
 
 ## Features
 
 - **Five providers, one monitor** in stable registry order.
-- **Native Linux tray** via `fyne.io/systray` and a compact, high-contrast usage icon.
+- **Interactive TUI** (`plan-usage show`) — keyboard-navigable, mouse-aware
+  dashboard with provider list, usage bars, and detail panels.
+- **Native Linux tray** (`plan-usage tray`) via `fyne.io/systray` and a
+  compact, high-contrast usage icon.
 - **True X11 popup** created with GTK3 `GTK_WINDOW_POPUP`. It is borderless,
   positioned at the pointer, clamped to the current monitor work area, and
   ignored by i3's managed window tree. It never opens a terminal.
@@ -23,8 +26,6 @@ once.
 - **Refresh now** in the popup and tray context menu, with timer/manual refresh
   requests serialized so only one provider refresh runs at a time.
 - **Escape, focus loss, outside click, or another tray click** hides the popup.
-- The existing `plan-usage show`, `daemon`, `refresh`, `polybar`, and `init`
-  commands remain unchanged apart from the documented `tray` additions.
 
 ## Install
 
@@ -65,8 +66,8 @@ go build -o ~/.local/bin/plan-usage ./cmd/plan-usage
 ```
 
 For Linux builds without CGO, and for non-Linux systems, the `tray` command
-is intentionally a stub that reports: Linux/X11 and CGO are required. The TUI,
-Polybar, daemon, and other commands remain available.
+is intentionally a stub that reports: Linux/X11 and CGO are required. The TUI
+(`plan-usage show`) remains available on all platforms.
 
 The repository vendors `gotk3 v0.6.4` because that release contains an upstream
 GDK callback reference that does not compile on GTK3. The vendored copy applies
@@ -110,48 +111,18 @@ do not use `sudo` or a headless SSH/TTY session.
 
 ## Refresh ownership
 
-Choose **one** process to own polling in a normal setup:
-
-```bash
-# Headless owner for Polybar-only setups
-plan-usage init system | sed "s|%h|$HOME|g" > ~/.config/systemd/user/plan-usage.service
-systemctl --user daemon-reload
-systemctl --user enable --now plan-usage.service
-
-# Or tray owner (it refreshes and writes snapshot.json itself)
-plan-usage tray
-```
-
-Tray and daemon are alternative refresh owners. Running both is allowed only
-if two independent pollers are intentional. Both use `Daemon.Refresh(context.Context)`
-for one refresh cycle and atomically write
-`$XDG_STATE_HOME/plan-usage/snapshot.json`.
-
-The existing Polybar module can read that snapshot regardless of which owner
-is active:
-
-```ini
-[module/plan-usage]
-type = custom/script
-exec = plan-usage polybar
-interval = 60
-click-left = plan-usage show
-click-right = plan-usage refresh
-```
+The tray owns polling automatically — it runs a periodic refresh loop
+using `Daemon.Refresh(context.Context)` and atomically writes
+`$XDG_STATE_HOME/plan-usage/snapshot.json`. The TUI reads that snapshot
+when started, so running `plan-usage tray` alongside `plan-usage show`
+gives you live data without a separate poller.
 
 ## Commands
 
 | command | purpose |
 |---|---|
-| `plan-usage show` | Open the existing interactive TUI. |
+| `plan-usage show` | Open the interactive TUI dashboard. |
 | `plan-usage tray` | Run the Linux/X11 native tray and GTK popup. |
-| `plan-usage polybar` | Print the cached Polybar line. |
-| `plan-usage daemon` | Poll continuously and write the snapshot. |
-| `plan-usage check [name]` | Print one provider or the aggregate as JSON. |
-| `plan-usage refresh` | Run one refresh cycle and exit. |
-| `plan-usage init polybar` | Emit a Polybar module snippet. |
-| `plan-usage init system` | Emit a systemd user unit. |
-| `plan-usage init tray` | Emit a `Terminal=false` Linux autostart entry. |
 | `plan-usage version` | Print version information. |
 
 Global flags include `--config PATH`, `--state-dir PATH`, `--debug`, and
@@ -170,13 +141,8 @@ providers:
   freebuff: {}
 
 enabled: [opencodego, codex, clinepass, commandcode, freebuff]
-refresh_interval: 60s     # daemon + tray cadence; minimum 5s
+refresh_interval: 60s     # tray cadence; minimum 5s
 probe_max_tokens: 1
-polybar:
-  format: "{icon} {name} {percent}%"
-  separator: " · "
-  hide_if_no_auth: true
-  no_auth_text: "—"
 debug: false
 ```
 
@@ -198,7 +164,7 @@ replace the snapshot atomically. The TUI does not write the snapshot.
 
 Authentication is discovered from the native CLI configuration files where
 possible, or from explicit YAML/environment overrides. Tokens are not stored in
-the snapshot, Polybar output, TUI debug panel, or tray cards.
+the snapshot, TUI debug panel, or tray cards.
 
 ## License
 
