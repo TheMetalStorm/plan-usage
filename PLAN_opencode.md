@@ -1,6 +1,6 @@
 # Plan: Fix OpenCode Zen + Go providers
 
-**Status:** ✅ plan approved, implementation complete (+ UI nav improvements ✅, TUI layout alignment fix ✅, provider-independent responsive layout ✅)
+**Status:** ✅ plan approved, implementation complete (+ UI nav improvements ✅, TUI layout alignment fix ✅, provider-independent responsive layout ✅, tray popup monitor/size fix ✅)
 
 ## Problem
 
@@ -115,6 +115,19 @@ Files:
 - Add TUI layout tests covering non-OpenCode labels, debug columns, alignment, and narrow widths.
 
 **Verification:** `go test ./internal/tui/`, `go build ./...`, and `go vet ./internal/tui/` pass.
+
+### Part 8 — Tray popup: bound size to the monitor and keep the tray clear   ✅
+
+**Problem (deep investigation, empirically verified on the user's i3/X11 setup):** The popup defaulted to 1120×760 (fills most of a 1080p screen). Content forced a ~1026px minimum width — the 4-column homogeneous grid multiplies the widest card's minimum, and `SetMaxWidthChars(48)` model lines made that card ~248px — so `Resize()` could never shrink below ~1026px, overflowing any display whose logical width is smaller (HiDPI scale-2 laptops, small panels). The size clamp in `showAtPointer()` only ran in the success path; seat/pointer/monitor failures showed the popup unclamped. Because i3 never sets `_NET_WORKAREA`, `gdk_monitor_get_workarea()` returns the full monitor geometry (verified with and without polybar running), so the tray/bar region is never excluded; opening at the top-right tray icon placed the popup at (800,30), covering the icon, and the seat grab then swallowed icon clicks while the covered click was "inside" the popup → no dismiss.
+
+**Changes:**
+- `internal/tray/tray.go`: smaller default size (960×680); per-card minimum-width caps (title 24 chars, status/usage/meta lines 36 chars, model lines 24 chars); new `popupInnerRect()` margin helper; new `popupEdgeMargin` (32) / `popupPointerOffset` (16) constants; new `clip()` helper for unbreakable model-name tokens.
+- `internal/tray/tray_linux.go`: `showAtPointer()` always clamps size and position into the monitor work area minus the edge margin (falling back to the primary monitor when no monitor is found — no more unclamped fallbacks), and offsets the popup from the click point so it never sits on the tray icon; `renderCard()`/`appendModelSection()` cap dynamic label widths.
+- `internal/tray/tray_test.go`: tests for `popupInnerRect`, size clamp against the inner rect, offset positioning staying inside the work area, and `clip`.
+
+**Key empirical finding (measured with a temporary GTK probe):** `SetMaxWidthChars` alone does NOT bound a label's minimum width when the text contains one unbreakable token (GTK wraps only at word boundaries) — a 53-char model ID still forced min 336px. Only `SetEllipsize(pango.ELLIPSIZE_END)` (plus `clip()` for model names) bounds the minimum: measured grid minimum dropped 1010 → 846px, window default now renders at 960×680, and a tray-corner click places the popup at y=78, leaving the top bar (y 0–40) free.
+
+**Verification:** `go build ./...`, `go test ./...` (all packages), and `go vet ./internal/tray/` pass.
 
 ## Out of scope
 

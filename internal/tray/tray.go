@@ -21,13 +21,28 @@ import (
 
 const (
 	windowTitle        = "plan-usage"
-	popupWidth         = 1120
-	popupHeight        = 760
+	popupWidth         = 960
+	popupHeight        = 680
 	popupGridColumns   = 4
 	popupBorder        = 8
 	popupSpacing       = 6
 	popupCardSpacing   = 4
-	popupModelMaxChars = 48
+	popupModelMaxChars = 24
+	// popupCardTitleMaxChars and popupLineMaxChars bound the minimum width a
+	// single card can demand. The popup places cards in a 4-column
+	// homogeneous grid, so the widest card's minimum is multiplied by four;
+	// without these caps the popup could never shrink below ~1000px and
+	// would overflow small or HiDPI displays.
+	popupCardTitleMaxChars = 24
+	popupLineMaxChars      = 36
+	// popupEdgeMargin keeps the popup clear of every screen edge. An
+	// edge-positioned system tray bar (top-right in the reference i3 +
+	// polybar setup) therefore stays visible and clickable, and there is
+	// always a clickable "outside" area left to dismiss the popup.
+	popupEdgeMargin = 32
+	// popupPointerOffset moves the popup away from the click point so it
+	// never covers the tray icon that opened it.
+	popupPointerOffset = 16
 )
 
 // ProviderCard is the complete representation rendered by the popup for one
@@ -190,6 +205,22 @@ func formatUpdated(t time.Time) string {
 	return "Last update: " + durationText(age) + " ago"
 }
 
+// clip truncates s to at most max runes, appending "…" when truncated. It
+// bounds the minimum width a label can demand even when the text contains a
+// single unbreakable token, because GTK labels only wrap at word boundaries
+// and an over-long word would otherwise force the popup wider than its
+// monitor.
+func clip(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
 // popupGridPosition returns the zero-based grid position for a provider card.
 func popupGridPosition(index int) (column, row int) {
 	if index < 0 {
@@ -206,6 +237,27 @@ func popupSizeForWorkarea(width, height int, work Rect) (int, int) {
 		height = work.Height
 	}
 	return width, height
+}
+
+// popupInnerRect returns the monitor area the popup is allowed to occupy:
+// the work area shrunk by popupEdgeMargin on every side. Keeping the popup
+// strictly inside this rect guarantees that an edge-positioned system tray
+// bar stays visible and that a clickable "outside" region always remains,
+// so outside-click-to-hide and the tray icon keep working.
+func popupInnerRect(work Rect) Rect {
+	m := popupEdgeMargin
+	inner := work
+	inner.X += m
+	inner.Width -= 2 * m
+	if inner.Width < 0 {
+		inner.Width = 0
+	}
+	inner.Y += m
+	inner.Height -= 2 * m
+	if inner.Height < 0 {
+		inner.Height = 0
+	}
+	return inner
 }
 
 // PopupClickOutside reports whether local popup coordinates fall outside the
