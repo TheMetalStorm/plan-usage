@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -45,6 +46,12 @@ import (
 )
 
 const usageIconBase64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALUlEQVR42mP4TyFgABESCgZkYbIMMLpTAcZDyACYBnQ8SA3ApmjUgCFjACUAADUiaw93Ogv/AAAAAElFTkSuQmCC"
+
+// errorRetryInterval is the accelerated refresh cadence used while at least
+// one provider snapshot has a connectivity-class error, so recovery (e.g.
+// after a VPN is disabled) is detected within seconds instead of waiting for
+// the full configured interval.
+const errorRetryInterval = 15 * time.Second
 
 // Run starts the real Linux/X11 tray popup. GTK_WINDOW_POPUP is an
 // override-redirect X11 window, so i3 does not add it to its managed tree.
@@ -154,6 +161,10 @@ type popup struct {
 	emptyLabel *gtk.Label
 	stopMu     sync.RWMutex
 	stopped    bool
+
+	// lastNetworkErr is set after every refresh and drives the accelerated
+	// retry cadence in refreshLoop while a provider looks network-blocked.
+	lastNetworkErr atomic.Bool
 }
 
 func newPopup(cfg *config.Config, poller *daemon.Daemon, store *state.Store, display *gdk.Display) (*popup, error) {
@@ -330,6 +341,9 @@ func (p *popup) hide() {
 }
 
 func (p *popup) showAtPointer() {
+	// Opening the popup always fetches fresh data, so a disabled VPN is
+	// detected immediately instead of only after the periodic timer fires.
+	defer p.requestRefresh()
 	seat, err := p.display.GetDefaultSeat()
 	if err != nil {
 		p.window.ShowAll()
@@ -373,17 +387,29 @@ func (p *popup) requestRefresh() {
 		defer cancel()
 		p.poller.Refresh(ctx)
 		if err := p.store.Load(); err != nil {
+			// Treat an unreadable snapshot as a transient failure so the
+			// accelerated retry keeps going until the next write succeeds.
+			p.lastNetworkErr.Store(true)
 			_ = p.runOnGTK(func() { p.status.SetText("Refresh completed, but snapshot could not be read: " + err.Error()) })
 			return
 		}
 		agg := p.store.All()
+		p.lastNetworkErr.Store(aggregateHasNetworkError(agg))
 		_ = p.runOnGTK(func() { p.render(agg) })
 	}()
 }
 
 func (p *popup) refreshLoop(ctx context.Context) {
 	for {
-		timer := time.NewTimer(p.cfg.RefreshEvery)
+		interval := p.cfg.RefreshEvery
+		// While a provider looks network-blocked (e.g. a VPN is routing the
+		// upstream into a black hole), probe on the accelerated cadence so
+		// recovery is noticed within seconds. Auth/config errors keep the
+		// normal interval to avoid hammering permanent faults.
+		if p.lastNetworkErr.Load() && interval > errorRetryInterval {
+			interval = errorRetryInterval
+		}
+		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
 			p.requestRefresh()
@@ -426,6 +452,18 @@ func (p *popup) render(agg types.Aggregate) {
 	}
 	p.cards.ShowAll()
 	p.status.SetText(fmt.Sprintf("%d provider(s) · refreshed %s", len(cards), aggregateAge(agg.GeneratedAt)))
+	p.updateTooltip(agg)
+}
+
+// updateTooltip reflects VPN/proxy-blocked providers in the tray tooltip so
+// the user is reminded that the status cannot be updated while a VPN is
+// active, even when the popup is hidden.
+func (p *popup) updateTooltip(agg types.Aggregate) {
+	if text := blockedTooltipText(agg); text != "" {
+		systray.SetTooltip(text)
+		return
+	}
+	systray.SetTooltip("plan-usage: coding-plan usage")
 }
 
 func renderCard(card ProviderCard) *gtk.Box {

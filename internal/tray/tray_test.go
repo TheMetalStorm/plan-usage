@@ -190,3 +190,43 @@ func TestRefreshGateSerializesManualAndTimerRefreshes(t *testing.T) {
 	}
 	gate.End()
 }
+
+func TestAggregateHasNetworkError(t *testing.T) {
+	blocked := types.Aggregate{Providers: map[string]types.Snapshot{
+		"freebuff": {Err: "dial tcp: connection refused"},
+	}}
+	if !aggregateHasNetworkError(blocked) {
+		t.Fatal("want a network error to be detected")
+	}
+	authOnly := types.Aggregate{Providers: map[string]types.Snapshot{
+		"codex": {Err: "not authenticated"},
+	}}
+	if aggregateHasNetworkError(authOnly) {
+		t.Fatal("an auth error must not count as a network error")
+	}
+	if aggregateHasNetworkError(types.Aggregate{}) {
+		t.Fatal("an empty aggregate must not report a network error")
+	}
+}
+
+func TestBlockedTooltipTextNamesNetworkBlockedProviders(t *testing.T) {
+	agg := types.Aggregate{Providers: map[string]types.Snapshot{
+		"freebuff": {DisplayName: "Freebuff", Err: `Get "...": dial tcp: connection refused`},
+		"codex":    {DisplayName: "Codex", Err: "not authenticated"},
+	}}
+	text := blockedTooltipText(agg)
+	if !strings.Contains(text, "Freebuff") {
+		t.Fatalf("tooltip = %q, want Freebuff named", text)
+	}
+	if !strings.Contains(text, "VPN") {
+		t.Fatalf("tooltip = %q, want a VPN/proxy hint", text)
+	}
+	if strings.Contains(text, "Codex") {
+		t.Fatalf("tooltip = %q, an auth error must not be listed as blocked", text)
+	}
+	if blockedTooltipText(types.Aggregate{Providers: map[string]types.Snapshot{
+		"codex": {DisplayName: "Codex", Err: "not authenticated"},
+	}}) != "" {
+		t.Fatal("want an empty tooltip when no provider is network-blocked")
+	}
+}
