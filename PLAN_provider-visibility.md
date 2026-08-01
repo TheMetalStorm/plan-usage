@@ -63,7 +63,11 @@ de-facto contract and must be updated in the same commits per docs-precedence.)
 
 ## Parts
 
-### Part 1 — config: allowlist mutation helpers   ✅
+### Part 1 — config: allowlist mutation helpers   ✅ (commit 1713b00)
+
+- `SetProviderEnabled` materializes the default-on allowlist on first
+  toggle and persists under the new config mutex; `ApplyFresh` lets the
+  tray pick up toggles from a concurrently running TUI.
 
 Add concurrency-safe enable/disable helpers to `internal/config/config.go`:
 
@@ -83,7 +87,11 @@ Add concurrency-safe enable/disable helpers to `internal/config/config.go`:
 
 Verify: `cd <repo> && go test ./internal/config/ && go vet ./internal/config/`
 
-### Part 2 — TUI provider picker   🚧
+### Part 2 — TUI provider picker   ✅
+
+- `x` toggles a picker listing every provider with `[x]`/`[ ]`;
+  `space`/`enter` persists a toggle, `esc`/`x` returns. Hidden providers
+  stay reachable and the detail panel follows the picker cursor.
 
 `internal/tui/tui.go`:
 

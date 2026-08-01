@@ -25,6 +25,8 @@ type Model struct {
 	log         *debug.Log
 	selected    int
 	items       []types.Snapshot
+	allNames    []string // every registered provider, in registry order
+	picker      bool     // provider visibility picker mode (x toggles it)
 	debug       bool
 	lastRefresh time.Time
 	width       int
@@ -37,16 +39,14 @@ type Model struct {
 // rows immediately.
 func New(cfg *config.Config, store *state.Store) *Model {
 	m := &Model{
-		cfg:     cfg,
-		store:   store,
-		log:     debug.New(64),
-		debug:   cfg.Debug,
-		pending: map[string]bool{},
-		items:   loadItems(store),
+		cfg:      cfg,
+		store:    store,
+		log:      debug.New(64),
+		debug:    cfg.Debug,
+		pending:  map[string]bool{},
+		allNames: providers.AllNames(),
 	}
-	if len(m.items) == 0 {
-		m.items = seedFromProviders(cfg)
-	}
+	m.rebuildItems()
 	return m
 }
 
@@ -121,24 +121,58 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case toggleDoneMsg:
+		if mm.enabled {
+			m.log.Ok(mm.name, "provider shown")
+		} else {
+			m.log.Warn(mm.name, "provider hidden")
+		}
+		m.rebuildItems()
+		return m, nil
+
+	case toggleErrMsg:
+		m.log.Error(mm.name, "toggle failed: %s", mm.err)
+		return m, nil
+
 	case tea.KeyMsg:
 		switch {
 		case keyMatches(mm, "q", "ctrl+c"):
 			return m, tea.Quit
-		case keyMatches(mm, "up", "k"):
-			if m.selected > 0 {
-				m.selected--
+		case m.picker:
+			switch {
+			case keyMatches(mm, "x", "esc"):
+				m.picker = false
+				m.clampSelectedToItems()
+			case keyMatches(mm, "up", "k"):
+				if m.selected > 0 {
+					m.selected--
+				}
+			case keyMatches(mm, "down", "j"):
+				if m.selected < len(m.allNames)-1 {
+					m.selected++
+				}
+			case keyMatches(mm, "space", "enter"):
+				return m, m.toggleSelectedCmd()
 			}
-		case keyMatches(mm, "down", "j"):
-			if m.selected < len(m.items)-1 {
-				m.selected++
+		default:
+			switch {
+			case keyMatches(mm, "up", "k"):
+				if m.selected > 0 {
+					m.selected--
+				}
+			case keyMatches(mm, "down", "j"):
+				if m.selected < len(m.items)-1 {
+					m.selected++
+				}
+			case keyMatches(mm, "r"):
+				return m, m.refreshSelectedCmd()
+			case keyMatches(mm, "R"):
+				return m, m.refreshAllCmd()
+			case keyMatches(mm, "D"):
+				m.debug = !m.debug
+			case keyMatches(mm, "x"):
+				m.enterPicker()
 			}
-		case keyMatches(mm, "r"):
-			return m, m.refreshSelectedCmd()
-		case keyMatches(mm, "R"):
-			return m, m.refreshAllCmd()
-		case keyMatches(mm, "D"):
-			m.debug = !m.debug
 		}
 
 	case tea.MouseMsg:
@@ -169,6 +203,22 @@ func (m *Model) panelWidths() (listW, detailW int) {
 
 // handleMouse processes mouse events for the TUI.
 func (m *Model) handleMouse(mm tea.MouseMsg) tea.Cmd {
+	// In picker mode rows are single-line (no probing line), so the left
+	// panel's two-lines-per-entry click mapping does not apply; keep the
+	// wheel working against the full provider list.
+	if m.picker {
+		switch mm.Type {
+		case tea.MouseWheelUp:
+			if m.selected > 0 {
+				m.selected--
+			}
+		case tea.MouseWheelDown:
+			if m.selected < len(m.allNames)-1 {
+				m.selected++
+			}
+		}
+		return nil
+	}
 	listW, _ := m.panelWidths()
 
 	switch mm.Type {
@@ -244,6 +294,14 @@ type probeDoneMsg struct {
 	snap types.Snapshot
 }
 type probeErrMsg struct {
+	name string
+	err  string
+}
+type toggleDoneMsg struct {
+	name    string
+	enabled bool
+}
+type toggleErrMsg struct {
 	name string
 	err  string
 }
@@ -342,14 +400,93 @@ func (m *Model) refreshAllCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// toggleSelectedCmd persists the visibility toggle for the provider under
+// the picker cursor and posts the new state back via toggleDoneMsg /
+// toggleErrMsg. The config write happens off the bubbletea event loop so
+// Update stays responsive.
+func (m *Model) toggleSelectedCmd() tea.Cmd {
+	if m.selected < 0 || m.selected >= len(m.allNames) {
+		return nil
+	}
+	name := m.allNames[m.selected]
+	want := !m.cfg.IsProviderEnabled(name)
+	return func() tea.Msg {
+		if err := m.cfg.SetProviderEnabled(m.allNames, name, want); err != nil {
+			return toggleErrMsg{name: name, err: err.Error()}
+		}
+		return toggleDoneMsg{name: name, enabled: want}
+	}
+}
+
+// enterPicker switches to the provider visibility picker, keeping the
+// selection inside the full registry list.
+func (m *Model) enterPicker() {
+	m.picker = true
+	if m.selected >= len(m.allNames) {
+		m.selected = max(len(m.allNames)-1, 0)
+	}
+}
+
+// clampSelectedToItems keeps the selection inside the visible item list
+// after returning from the picker or rebuilding items.
+func (m *Model) clampSelectedToItems() {
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.selected >= len(m.items) {
+		m.selected = max(len(m.items)-1, 0)
+	}
+}
+
 // ---------- helpers ----------
 
-func loadItems(store *state.Store) []types.Snapshot {
-	agg := store.All()
-	out := make([]types.Snapshot, 0, len(agg.Providers))
-	for name, snap := range agg.Providers {
-		snap.Provider = name
-		out = append(out, snap)
+// rebuildItems recomputes the visible provider list from the current
+// enabled allowlist and clamps the selection back into it. Called at
+// startup and after every visibility toggle.
+func (m *Model) rebuildItems() {
+	m.items = m.itemsForEnabled()
+	m.clampSelectedToItems()
+}
+
+// itemsForEnabled returns one Snapshot per enabled provider in registry
+// order. Live store data wins; anything the store has no entry for is
+// seeded from the provider registry so the table has rows immediately.
+// Providers disabled since the snapshot was written are filtered out.
+func (m *Model) itemsForEnabled() []types.Snapshot {
+	cached := map[string]types.Snapshot{}
+	if m.store != nil {
+		for name, snap := range m.store.All().Providers {
+			cached[name] = snap
+		}
+	}
+	out := make([]types.Snapshot, 0, len(m.allNames))
+	for _, name := range m.allNames {
+		if !m.cfg.IsProviderEnabled(name) {
+			continue
+		}
+		if snap, ok := cached[name]; ok {
+			snap.Provider = name
+			out = append(out, snap)
+			continue
+		}
+		p, err := providers.Get(name)
+		if err != nil {
+			continue
+		}
+		s := types.Snapshot{
+			Provider:    name,
+			DisplayName: p.DisplayName(),
+			Icon:        p.Icon(),
+			FreeModels:  p.AvailableModels(),
+		}
+		if e := p.IsConfigured(); e != nil {
+			s.Err = e.Error()
+		}
+		// Multi-window providers carry their plan scaffold with them;
+		// surface it immediately so the user sees the bars before the
+		// first live probe completes.
+		providers.EnrichWindows(p, &s)
+		out = append(out, s)
 	}
 	sortByProvider(out)
 	return out
@@ -365,32 +502,6 @@ func sortByProvider(s []types.Snapshot) {
 			s[j-1], s[j] = s[j], s[j-1]
 		}
 	}
-}
-
-func seedFromProviders(cfg *config.Config) []types.Snapshot {
-	out := make([]types.Snapshot, 0)
-	for _, p := range providers.All() {
-		name := p.Name()
-		if !cfg.IsProviderEnabled(name) {
-			continue
-		}
-		s := types.Snapshot{
-			Provider:    name,
-			DisplayName: p.DisplayName(),
-			Icon:        p.Icon(),
-			FreeModels:  p.AvailableModels(),
-		}
-		if err := p.IsConfigured(); err != nil {
-			s.Err = err.Error()
-		}
-		// Multi-window providers carry their plan scaffold with them;
-		// surface it immediately so the user sees the bars before the
-		// first live probe completes.
-		providers.EnrichWindows(p, &s)
-		out = append(out, s)
-	}
-	sortByProvider(out)
-	return out
 }
 
 func keyMatches(k tea.KeyMsg, want ...string) bool {
@@ -418,8 +529,13 @@ func (m *Model) renderHeader() string {
 
 func (m *Model) renderList(panelW int) string {
 	var b strings.Builder
-	b.WriteString(listHeaderStyle.Render("PROVIDERS"))
-	b.WriteString("\n")
+	if m.picker {
+		b.WriteString(listHeaderStyle.Render("SHOW/HIDE PROVIDERS"))
+		b.WriteString("\n")
+	} else {
+		b.WriteString(listHeaderStyle.Render("PROVIDERS"))
+		b.WriteString("\n")
+	}
 
 	// Available content width inside the list panel:
 	//   panel(colW) uses Width(colW - 2) before borders, and the style
@@ -428,6 +544,36 @@ func (m *Model) renderList(panelW int) string {
 	contentW := panelContentWidth(panelW)
 	if contentW < 8 {
 		contentW = 8
+	}
+
+	// Picker mode lists every registered provider with a checkbox so
+	// hidden providers stay reachable. Each row is a single line, so the
+	// normal two-lines-per-entry geometry does not apply.
+	if m.picker {
+		for i, name := range m.allNames {
+			cursor := "  "
+			if i == m.selected {
+				cursor = "▸ "
+			}
+			box := "[ ]"
+			if m.cfg.IsProviderEnabled(name) {
+				box = "[x]"
+			}
+			display := name
+			if p, err := providers.Get(name); err == nil {
+				display = p.DisplayName()
+			}
+			row := cursor + box + " " + truncateDisplay(display, contentW-6)
+			switch {
+			case i == m.selected:
+				row = selectedStyle.Render(row)
+			case !m.cfg.IsProviderEnabled(name):
+				row = subStyle.Render(row)
+			}
+			b.WriteString(row)
+			b.WriteString("\n")
+		}
+		return b.String()
 	}
 
 	// First pass: find the widest badge so we can use a single fixed name
@@ -512,10 +658,46 @@ func statusBadge(s types.Snapshot) (string, lipgloss.Color) {
 }
 
 func (m *Model) renderDetail(panelW int) string {
+	if m.picker {
+		// In picker mode the selection walks the full registry, so the
+		// detail panel shows the selected provider even when it is hidden.
+		if m.selected < 0 || m.selected >= len(m.allNames) {
+			return "no provider\n"
+		}
+		name := m.allNames[m.selected]
+		var s types.Snapshot
+		for i := range m.items {
+			if m.items[i].Provider == name {
+				s = m.items[i]
+				break
+			}
+		}
+		if s.Provider == "" {
+			if p, err := providers.Get(name); err == nil {
+				s = types.Snapshot{
+					Provider:    name,
+					DisplayName: p.DisplayName(),
+					Icon:        p.Icon(),
+					FreeModels:  p.AvailableModels(),
+				}
+				if e := p.IsConfigured(); e != nil {
+					s.Err = e.Error()
+				}
+				providers.EnrichWindows(p, &s)
+			} else {
+				s = types.Snapshot{Provider: name, DisplayName: name}
+			}
+		}
+		return m.renderDetailPanel(panelW, s)
+	}
 	if len(m.items) == 0 || m.selected >= len(m.items) {
 		return "no provider\n"
 	}
-	s := m.items[m.selected]
+	return m.renderDetailPanel(panelW, m.items[m.selected])
+}
+
+// renderDetailPanel renders one provider snapshot into the detail panel.
+func (m *Model) renderDetailPanel(panelW int, s types.Snapshot) string {
 	var b strings.Builder
 	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
 		titleStyle.Render(s.DisplayName), "  ", subStyle.Render(s.Provider)))
@@ -709,7 +891,10 @@ func (m *Model) renderLog() string {
 }
 
 func (m *Model) renderFooter() string {
-	parts := []string{"↑/k ↓/j switch", "r refresh", "R refresh all", "D debug", "q quit"}
+	if m.picker {
+		return subStyle.Render("space/enter toggle   esc/x back   q quit")
+	}
+	parts := []string{"↑/k ↓/j switch", "r refresh", "R refresh all", "x show/hide", "D debug", "q quit"}
 	return subStyle.Render(strings.Join(parts, "   "))
 }
 
