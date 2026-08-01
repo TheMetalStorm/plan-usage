@@ -1,11 +1,13 @@
 package tray
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/TheMetalStorm/plan-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/providers"
 	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
@@ -338,5 +340,25 @@ func TestBlockedTooltipTextNamesNetworkBlockedProviders(t *testing.T) {
 		"codex": {DisplayName: "Codex", Err: "not authenticated"},
 	}}) != "" {
 		t.Fatal("want an empty tooltip when no provider is network-blocked")
+	}
+}
+
+func TestBuildCardsRespectsToggledOffProvider(t *testing.T) {
+	cfg := &config.Config{ConfigPath: filepath.Join(t.TempDir(), "config.yaml")}
+	agg := types.Aggregate{Providers: map[string]types.Snapshot{
+		"codex":    {DisplayName: "Codex", Icon: "C"},
+		"freebuff": {DisplayName: "Freebuff", Icon: "F"},
+	}}
+	if err := cfg.SetProviderEnabled(providers.AllNames(), "codex", false); err != nil {
+		t.Fatal(err)
+	}
+	cards := BuildCards(cfg, agg)
+	for _, card := range cards {
+		if card.Name == "codex" {
+			t.Fatal("codex card must not be built after being toggled off")
+		}
+	}
+	if len(cards) == 0 {
+		t.Fatal("other providers must still be built after one is toggled off")
 	}
 }
