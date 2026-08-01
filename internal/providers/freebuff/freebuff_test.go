@@ -209,7 +209,7 @@ func testFinder(t *testing.T) *auth.Finder {
 	return f
 }
 
-func TestNetworkFailureAddsVPNHint(t *testing.T) {
+func TestNetworkFailureAddsReminder(t *testing.T) {
 	p := NewWith(testFinder(t), nil)
 	p.hc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return nil, errors.New("dial tcp: lookup www.codebuff.com: no such host")
@@ -221,12 +221,14 @@ func TestNetworkFailureAddsVPNHint(t *testing.T) {
 	if !strings.Contains(stats.Error, "no such host") {
 		t.Fatalf("Error = %q, want the underlying network reason", stats.Error)
 	}
-	if !strings.Contains(stats.Error, "VPN") {
-		t.Fatalf("Error = %q, want a VPN/proxy hint for a network failure", stats.Error)
+	for _, want := range []string{"will not work with a VPN", "run a premium session", "at least one message"} {
+		if !strings.Contains(stats.Error, want) {
+			t.Fatalf("Error = %q, want the offline reminder fragment %q", stats.Error, want)
+		}
 	}
 }
 
-func TestAuthFailureHasNoVPNHint(t *testing.T) {
+func TestAuthFailureStillShowsReminder(t *testing.T) {
 	p := NewWith(testFinder(t), nil)
 	p.hc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusUnauthorized, `{"error":"unauthorized"}`), nil
@@ -238,8 +240,35 @@ func TestAuthFailureHasNoVPNHint(t *testing.T) {
 	if !strings.Contains(stats.Error, "HTTP 401") {
 		t.Fatalf("Error = %q, want the HTTP 401 reason", stats.Error)
 	}
-	if strings.Contains(stats.Error, "VPN") {
-		t.Fatalf("Error = %q, an auth failure must not mention VPN", stats.Error)
+	// The offline reminder (VPN + after-restart tip) is shown on every
+	// degraded snapshot, auth failures included.
+	for _, want := range []string{"will not work with a VPN", "run a premium session", "at least one message"} {
+		if !strings.Contains(stats.Error, want) {
+			t.Fatalf("Error = %q, want the offline reminder fragment %q", stats.Error, want)
+		}
+	}
+}
+
+func TestOfflineStatsAlwaysIncludesReminder(t *testing.T) {
+	reasons := []string{
+		"dial tcp: connection refused",
+		"freebuff session: HTTP 401: unauthorized",
+		"freebuff session: parse: invalid character",
+		"no Freebuff bearer token",
+	}
+	for _, reason := range reasons {
+		stats := offlineStats(nil, reason)
+		if !strings.Contains(stats.Error, reason) {
+			t.Errorf("reason %q: Error = %q, want the reason preserved", reason, stats.Error)
+		}
+		for _, want := range []string{"will not work with a VPN", "run a premium session", "at least one message"} {
+			if !strings.Contains(stats.Error, want) {
+				t.Errorf("reason %q: Error = %q, want reminder fragment %q", reason, stats.Error, want)
+			}
+			if !strings.Contains(stats.Note, want) {
+				t.Errorf("reason %q: Note = %q, want reminder fragment %q", reason, stats.Note, want)
+			}
+		}
 	}
 }
 
