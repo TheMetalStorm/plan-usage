@@ -41,8 +41,8 @@ func seedGoDB(t *testing.T) (*OpenCodeDB, int64) {
 	dayBTS := dayB.UnixMilli()
 
 	rows := []struct {
-		ts   int64
-		cost float64
+		ts    int64
+		cost  float64
 		model any
 	}{
 		{dayBTS, 4, `{"id":"glm-5.2","providerID":"opencode-go","variant":"default"}`},

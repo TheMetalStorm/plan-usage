@@ -20,15 +20,15 @@ func providerWithServer(s *opencodeutil.ServerUsage, at time.Time) *Provider {
 func TestSnapshotWindows_ServerOverlay(t *testing.T) {
 	now := time.Now()
 	p := providerWithServer(&opencodeutil.ServerUsage{
-		RollingPercent:  5,
-		RollingReset:    3600,
-		WeeklyPercent:   0,
-		WeeklyReset:     259200,
-		HasWeekly:       true,
-		MonthlyPercent:  98,
-		MonthlyReset:    1728000,
-		HasMonthly:      true,
-		UpdatedAt:       now,
+		RollingPercent: 5,
+		RollingReset:   3600,
+		WeeklyPercent:  0,
+		WeeklyReset:    259200,
+		HasWeekly:      true,
+		MonthlyPercent: 98,
+		MonthlyReset:   1728000,
+		HasMonthly:     true,
+		UpdatedAt:      now,
 	}, now)
 
 	ws := p.SnapshotWindows()
