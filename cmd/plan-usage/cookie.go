@@ -81,7 +81,7 @@ func runCookieImport(cc *opencodeutil.CookieCache, stdout io.Writer) error {
 		fmt.Fprintln(stdout, "no opencode.ai auth cookie found in browser cookies — log in at opencode.ai, then re-run 'plan-usage opencode-cookie import', or paste the cookie with 'plan-usage opencode-cookie -'")
 		return nil
 	}
-	if err := cc.Write(&opencodeutil.CacheCookie{Source: "chrome-import", Cookie: value, CachedAt: time.Now()}); err != nil {
+	if err := cc.Write(&opencodeutil.CacheCookie{Source: "browser-import", Cookie: value, CachedAt: time.Now()}); err != nil {
 		return fmt.Errorf("write cookie: %w", err)
 	}
 	fmt.Fprintln(stdout, "opencode cookie imported from browser cookie store")
@@ -103,14 +103,14 @@ func readStdinValue(stdin io.Reader) (string, error) {
 
 const cookieUsage = `usage:
   plan-usage opencode-cookie "<cookie value>"   store the opencode.ai auth cookie
-  plan-usage opencode-cookie import             import the auth cookie from the browser (Chrome-family)
+  plan-usage opencode-cookie import             import the auth cookie from Chrome/Chromium/Brave/Edge/Firefox/Safari
   plan-usage opencode-cookie -                  store the auth cookie read from stdin
   plan-usage opencode-cookie --clear            remove the cached cookie
   plan-usage opencode-cookie                    show cache state (never the value)
 
 The OpenCode Go card reads live usage percentages (5h rolling / weekly /
 monthly) from opencode.ai. The _server endpoint only accepts a browser
-session cookie — the "auth" cookie for opencode.ai (Chrome DevTools ->
+session cookie — the "auth" cookie for opencode.ai (browser DevTools ->
 Application -> Cookies -> https://opencode.ai). Without it the card falls
 back to local opencode.db cost estimates (labeled "local costs ...").
 

@@ -440,7 +440,7 @@ func (p *Provider) importCookieIfMissing() {
 	if err != nil || value == "" {
 		return
 	}
-	_ = cc.Write(&opencodeutil.CacheCookie{Source: "chrome-import", Cookie: value, CachedAt: time.Now()})
+	_ = cc.Write(&opencodeutil.CacheCookie{Source: "browser-import", Cookie: value, CachedAt: time.Now()})
 }
 
 // clearCookieCache removes the cached cookie so the next refresh re-imports

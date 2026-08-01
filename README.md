@@ -182,7 +182,7 @@ from the opencode.ai `_server` endpoint, which only accepts a browser
 To enable live server data:
 
 1. Log in at <https://opencode.ai> in your browser (Chrome, Chromium,
-   Brave, or Edge).
+   Brave, Edge, Firefox, or Safari).
 2. Import the `auth` cookie with a single command (never share it — it is
    a session secret):
 
@@ -190,10 +190,11 @@ To enable live server data:
    plan-usage opencode-cookie import
    ```
 
-   This reads the cookie directly from the browser's cookie store (the
-   tray/daemon also does this automatically whenever no cookie is cached,
-   so you only need to stay logged in at opencode.ai). If you use a
-   different browser, or want to paste it in, use one of:
+   This reads all common browser profiles directly from the browser's cookie
+   store (the tray/daemon also does this automatically whenever no cookie is
+   cached, so you only need to stay logged in at opencode.ai). If your browser
+   uses an encrypted or unusual cookie store, or you want to paste it in, use
+   one of:
 
    ```bash
    plan-usage opencode-cookie -                      # read the value from stdin

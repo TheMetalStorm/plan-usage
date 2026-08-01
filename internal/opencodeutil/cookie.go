@@ -14,9 +14,9 @@ import (
 
 // CacheCookie holds one cached OpenCode AI session cookie.
 type CacheCookie struct {
-	Source    string    `json:"source"`    // e.g. "manual", "chrome-import"
-	Cookie    string    `json:"cookie"`    // raw Cookie header value
-	CachedAt  time.Time `json:"cached_at"` // when we stored it
+	Source   string    `json:"source"`    // e.g. "manual", "browser-import"
+	Cookie   string    `json:"cookie"`    // raw Cookie header value
+	CachedAt time.Time `json:"cached_at"` // when we stored it
 }
 
 // CookieCache manages a file-backed cookie store for opencode.ai sessions.

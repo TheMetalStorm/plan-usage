@@ -195,7 +195,7 @@ func TestRunCookieImportFromBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if cached == nil || cached.Cookie != "browser-imported-cookie" || cached.Source != "chrome-import" {
-		t.Fatalf("cached = %#v, want Cookie=browser-imported-cookie Source=chrome-import", cached)
+	if cached == nil || cached.Cookie != "browser-imported-cookie" || cached.Source != "browser-import" {
+		t.Fatalf("cached = %#v, want Cookie=browser-imported-cookie Source=browser-import", cached)
 	}
 }

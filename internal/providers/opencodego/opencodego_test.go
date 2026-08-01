@@ -324,7 +324,7 @@ func TestAutoImport_WritesCookieWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if cached == nil || cached.Cookie != "imported-value" || cached.Source != "chrome-import" {
-		t.Fatalf("cached = %#v, want Cookie=imported-value Source=chrome-import", cached)
+	if cached == nil || cached.Cookie != "imported-value" || cached.Source != "browser-import" {
+		t.Fatalf("cached = %#v, want Cookie=imported-value Source=browser-import", cached)
 	}
 }
