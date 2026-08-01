@@ -1,6 +1,6 @@
 # PLAN — provider show/hide toggles (TUI + tray)
 
-**Status:** 🚧 draft, in progress
+**Status:** ✅ plan approved, implementation complete (2026-08-01)
 
 **Feature:** Let the user select and deselect which providers are shown in
 the terminal (TUI) and in the tray. Toggles persist to the `enabled`
@@ -120,7 +120,7 @@ Verify: `cd <repo> && go test ./internal/config/ && go vet ./internal/config/`
 
 Verify: `cd <repo> && go test ./internal/tui/ && go vet ./internal/tui/`
 
-### Part 3 — Tray context-menu checkboxes   ✅
+### Part 3 — Tray context-menu checkboxes   ✅ (commit 7da26cf)
 
 - One `systray.AddMenuItemCheckbox("Show <Name>", …)` per provider in the
   right-click menu; toggling persists via `SetProviderEnabled` and
@@ -145,7 +145,11 @@ Verify: `cd <repo> && go test ./internal/tui/ && go vet ./internal/tui/`
 
 Verify: `cd <repo> && go build ./... && go vet ./...`
 
-### Part 4 — README + plan close-out   🚧
+### Part 4 — README + plan close-out   ✅
+
+- README documents the `x` picker, the tray context-menu checkboxes, the
+  shared `enabled` allowlist persistence, first-toggle materialization, and
+  the tray's one-cycle cross-process config reload.
 
 `README.md`:
 
