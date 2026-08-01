@@ -42,9 +42,10 @@ type Provider struct {
 	db     *opencodeutil.OpenCodeDB
 	probe  *probe.Client
 
-	mu           sync.Mutex
-	lastServer   *opencodeutil.ServerUsage // cached server-side windows
-	lastServerAt time.Time                 // when lastServer was fetched
+	mu            sync.Mutex
+	lastServer    *opencodeutil.ServerUsage // cached server-side windows
+	lastServerAt  time.Time                 // when lastServer was fetched
+	lastServerErr string                    // stale-cookie hint when server data is unavailable
 }
 
 // New returns a Provider with probe initialized.
@@ -83,6 +84,11 @@ const (
 	// FetchUsage stay fresh for SnapshotWindows (no extra network I/O).
 	serverDataTTL = 10 * time.Minute
 )
+
+// staleCookieNote is appended to the local-fallback monthly bar when a
+// cookie existed (cached or just imported) but the server produced no
+// usage — the opencode.ai session has expired or been logged out.
+const staleCookieNote = "server data unavailable — cookie expired, re-import with 'plan-usage opencode-cookie import'"
 
 // IsConfigured: configured if auth.json has an `opencode-go` entry OR
 // we can read the local opencode.db with cost data.
@@ -152,8 +158,17 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 
 	now := time.Now()
 
+	// Capture whether a cookie existed before the fetch: fetchServerUsage
+	// may auto-import one from the browser when the cache is empty.
+	hadCookie := p.haveCookie()
+
 	// Try server-side overlay for the authoritative billing percentages.
 	serverData, _ := p.fetchServerUsage(ctx)
+
+	// A cookie is present (cached or just imported) yet the server produced
+	// no usage: the session is stale. Drop it so the next refresh re-imports
+	// from the browser, and surface a hint on the local fallback.
+	stale := serverData == nil && (hadCookie || p.haveCookie())
 
 	// Cache the latest server result (or clear it on failure) so that
 	// SnapshotWindows renders server data without its own network call.
@@ -161,11 +176,21 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 	if serverData != nil {
 		p.lastServer = serverData
 		p.lastServerAt = now
+		p.lastServerErr = ""
 	} else {
 		p.lastServer = nil
 		p.lastServerAt = time.Time{}
+		if stale {
+			p.lastServerErr = staleCookieNote
+		} else {
+			p.lastServerErr = ""
+		}
 	}
 	p.mu.Unlock()
+
+	if stale {
+		p.clearCookieCache()
+	}
 
 	if serverData != nil && serverData.AnyWindow() {
 		primary := p.serverPrimary(serverData, now)
@@ -310,8 +335,12 @@ func (p *Provider) localWindows(now time.Time) []types.UsageStats {
 	costWeekly := p.costSince(weekStart(now))
 	costMonth := p.costSince(monthStart(now))
 
-	// Monthly history note.
+	// Monthly history note (plus the stale-cookie hint when the server
+	// produced no usage despite having a cookie).
 	historyNote := p.dailyHistoryNote(14)
+	if errNote := p.serverErrNote(); errNote != "" {
+		historyNote += "; " + errNote
+	}
 
 	return []types.UsageStats{
 		{
@@ -373,8 +402,14 @@ func (p *Provider) dailyHistoryNote(days int) string {
 	return fmt.Sprintf("local costs since 1st (last %d days: $%.2f, %d sessions)", len(history), total, sessions)
 }
 
-// fetchServerUsage tries the _server endpoint for overlay data.
+// fetchServerUsage tries the _server endpoint for overlay data. When no
+// cookie is cached it first tries to import one from the browser, so a
+// missing/expired cookie self-heals on the next refresh.
 func (p *Provider) fetchServerUsage(ctx context.Context) (*opencodeutil.ServerUsage, error) {
+	// The _server endpoint only accepts a browser session cookie; API keys
+	// are rejected there.
+	p.importCookieIfMissing()
+
 	if p.apiKey == "" && !p.haveCookie() {
 		return nil, errors.New("no auth available for server query")
 	}
@@ -384,6 +419,38 @@ func (p *Provider) fetchServerUsage(ctx context.Context) (*opencodeutil.ServerUs
 	}
 	workspaceID := opencodeutil.ResolveWorkspaceID(p.cfgWorkspaceOverride())
 	return client.FetchUsage(ctx, workspaceID)
+}
+
+// importCookieIfMissing imports the opencode.ai auth cookie from the
+// browser when the cache is empty. Bounded: a no-op whenever a cookie is
+// already cached.
+func (p *Provider) importCookieIfMissing() {
+	cc, err := opencodeutil.NewCookieCache()
+	if err != nil || cc.Cookie() != "" {
+		return
+	}
+	value, err := opencodeutil.ImportOpenCodeCookie()
+	if err != nil || value == "" {
+		return
+	}
+	_ = cc.Write(&opencodeutil.CacheCookie{Source: "chrome-import", Cookie: value, CachedAt: time.Now()})
+}
+
+// clearCookieCache removes the cached cookie so the next refresh re-imports
+// from the browser (which may hold a fresh session).
+func (p *Provider) clearCookieCache() {
+	cc, err := opencodeutil.NewCookieCache()
+	if err != nil {
+		return
+	}
+	_ = cc.Write(&opencodeutil.CacheCookie{})
+}
+
+// serverErrNote returns the stale-cookie hint ("" when none), under mutex.
+func (p *Provider) serverErrNote() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastServerErr
 }
 
 // haveCookie checks if a cookie cache exists with a valid cookie.
