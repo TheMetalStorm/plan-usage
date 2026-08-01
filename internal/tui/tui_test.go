@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
@@ -308,5 +309,34 @@ func TestPickerDetailShowsHiddenProvider(t *testing.T) {
 	got := ansi.Strip(m.renderDetail(30))
 	if !strings.Contains(got, "Freebuff") {
 		t.Fatalf("picker detail for a hidden provider = %q, want its display name", got)
+	}
+}
+
+func TestPickerSpaceKeyTogglesSelectedProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{ConfigPath: path}
+	cfg.Defaults()
+	m := &Model{
+		cfg:      cfg,
+		log:      debug.New(64),
+		pending:  map[string]bool{},
+		allNames: providers.AllNames(),
+		picker:   true,
+	}
+	m.rebuildItems()
+	for i, name := range m.allNames {
+		if name == "codex" {
+			m.selected = i
+		}
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if cmd == nil {
+		t.Fatal("space key did not return a toggle command")
+	}
+	msg := cmd()
+	toggled, ok := msg.(toggleDoneMsg)
+	if !ok || toggled.name != "codex" || toggled.enabled {
+		t.Fatalf("space command result = %#v, want codex hidden", msg)
 	}
 }

@@ -22,8 +22,8 @@ ClinePass, CommandCode, and Freebuff. Choose the interactive TUI
   every usage window, progress, percent, used/total, reset information, notes,
   last update time, and the free model catalog below the usage details when
   one is available. Free model names wrap inside the popup. The tray context
-  menu (right-click) lists one **Show <Provider>** checkbox per provider so
-  the visible set can be changed without touching the config file.
+  menu (right-click) has a **Toggle providers** submenu with one checkbox per
+  provider, so the visible set can be changed without touching the config file.
 - **Provider visibility toggles in both surfaces** — the TUI's `x` picker and
   the tray's context-menu checkboxes write the same `enabled` allowlist, so
   the selection is shared, persists across restarts, and controls which
@@ -219,8 +219,9 @@ next launch of the other surface:
 - **TUI (`plan-usage show`)** — press `x` to open the provider picker. Every
   registered provider is listed with `[x]`/`[ ]`; `space`/`enter` toggles the
   highlighted provider (saved immediately), `esc`/`x` returns to the list.
-- **Tray** — right-click the tray icon and tick/untick **Show <Provider>**
-  entries. The popup re-renders immediately. The tray also reloads
+- **Tray** — right-click the tray icon, hover **Toggle providers**, and
+  tick/untick the provider entries. The popup re-renders immediately. The tray
+  also reloads
   `config.yaml` on every refresh cycle, so a toggle made in a concurrently
   running TUI is picked up within one refresh interval (the TUI reads the
   config at startup, so a tray-side toggle applies on the next `show`).

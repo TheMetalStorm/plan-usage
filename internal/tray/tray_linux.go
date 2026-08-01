@@ -117,6 +117,7 @@ func Run(cfg *config.Config) error {
 		refreshItem := systray.AddMenuItem("Refresh now", "Refresh all enabled providers")
 		quitItem := systray.AddMenuItem("Quit", "Exit plan-usage")
 		systray.AddSeparator()
+		toggleMenu := systray.AddMenuItem("Toggle providers", "Choose which providers appear in the tray popup")
 		popup.menuMu.Lock()
 		popup.toggleItems = popup.toggleItems[:0]
 		for _, name := range providers.AllNames() {
@@ -125,8 +126,8 @@ func Run(cfg *config.Config) error {
 			if p, err := providers.Get(name); err == nil && p.DisplayName() != "" {
 				display = p.DisplayName()
 			}
-			item := systray.AddMenuItemCheckbox(
-				"Show "+display,
+			item := toggleMenu.AddSubMenuItemCheckbox(
+				display,
 				"Show or hide "+display+" in the tray popup",
 				cfg.IsProviderEnabled(name),
 			)

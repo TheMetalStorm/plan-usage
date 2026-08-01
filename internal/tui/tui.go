@@ -151,7 +151,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.selected < len(m.allNames)-1 {
 					m.selected++
 				}
-			case keyMatches(mm, "space", "enter"):
+			case keyMatches(mm, " ", "enter"):
 				return m, m.toggleSelectedCmd()
 			}
 		default:
