@@ -399,25 +399,24 @@ func (p *Provider) resolveToken(a *auth.Finder) string {
 	return strings.TrimSpace(cred.Token)
 }
 
-// networkBlockHint returns a concise, human-readable hint when reason looks
-// like a connectivity failure that a VPN or proxy typically causes. It
-// returns "" for auth/config faults so the card status stays focused on the
-// real cause and the tray's fast-retry loop does not hammer permanent errors.
-func networkBlockHint(reason string) string {
-	if !types.LooksLikeNetworkError(reason) {
-		return ""
-	}
-	return "a VPN or proxy may be blocking access · disable it and refresh"
-}
+// offlineReminder is appended to every degraded/offline snapshot so the user
+// is reminded (a) that Freebuff and the usage display will not work while a
+// VPN is active, and (b) that after a restart usage only appears once a
+// premium session has been run and at least one message has been sent.
+const offlineReminder = "Freebuff and this usage display will not work with a VPN. After a restart, run a premium session and send at least one message for usage to appear here."
 
 func offlineStats(a *auth.Finder, reason string) *types.UsageStats {
-	if hint := networkBlockHint(reason); hint != "" {
-		reason = reason + " · " + hint
+	errText := reason
+	if errText == "" {
+		errText = "no live Freebuff session quota"
 	}
+	errText += " · " + offlineReminder
+
 	note := "no live Freebuff session quota"
 	if reason != "" {
 		note += " (" + reason + ")"
 	}
+	note += " · " + offlineReminder
 	if a != nil {
 		if name, email, ok := a.FreebuffAccount(); ok {
 			identity := name
@@ -432,7 +431,7 @@ func offlineStats(a *auth.Finder, reason string) *types.UsageStats {
 		WindowLabel: "daily (Pacific)",
 		LastProbeAt: time.Now(),
 		Note:        note + " · showing the static model catalog",
-		Error:       reason,
+		Error:       errText,
 	}
 }
 
