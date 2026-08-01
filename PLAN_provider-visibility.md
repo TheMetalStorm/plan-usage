@@ -87,7 +87,7 @@ Add concurrency-safe enable/disable helpers to `internal/config/config.go`:
 
 Verify: `cd <repo> && go test ./internal/config/ && go vet ./internal/config/`
 
-### Part 2 — TUI provider picker   ✅
+### Part 2 — TUI provider picker   ✅ (commit 4f34ccb)
 
 - `x` toggles a picker listing every provider with `[x]`/`[ ]`;
   `space`/`enter` persists a toggle, `esc`/`x` returns. Hidden providers
@@ -120,7 +120,12 @@ Verify: `cd <repo> && go test ./internal/config/ && go vet ./internal/config/`
 
 Verify: `cd <repo> && go test ./internal/tui/ && go vet ./internal/tui/`
 
-### Part 3 — Tray context-menu checkboxes   🚧
+### Part 3 — Tray context-menu checkboxes   ✅
+
+- One `systray.AddMenuItemCheckbox("Show <Name>", …)` per provider in the
+  right-click menu; toggling persists via `SetProviderEnabled` and
+  re-renders the popup. The tray reloads `config.yaml` every refresh tick
+  so toggles from a concurrently running TUI converge within one cycle.
 
 `internal/tray/tray_linux.go`:
 
