@@ -273,7 +273,7 @@ func TestFetchUsage_StaleCookieSetsServerErr(t *testing.T) {
 	}
 }
 
-func TestFetchUsage_NoCookieNoServerErr(t *testing.T) {
+func TestFetchUsage_NoCookieShowsLoginHint(t *testing.T) {
 	withCookieState(t)
 	t.Setenv("HOME", t.TempDir()) // no browser cookie stores installed
 
@@ -285,13 +285,17 @@ func TestFetchUsage_NoCookieNoServerErr(t *testing.T) {
 	p.mu.Lock()
 	errNote := p.lastServerErr
 	p.mu.Unlock()
-	if errNote != "" {
-		t.Fatalf("lastServerErr = %q, want empty (no cookie to flag)", errNote)
+	if !strings.Contains(errNote, "log in at opencode.ai") {
+		t.Fatalf("lastServerErr = %q, want login hint", errNote)
 	}
 
+	// The local fallback monthly bar tells the user to log in.
 	ws := p.SnapshotWindows()
+	if !strings.Contains(ws[2].Note, "log in at opencode.ai") {
+		t.Fatalf("monthly note = %q, want login hint", ws[2].Note)
+	}
 	if strings.Contains(ws[2].Note, "cookie expired") {
-		t.Fatalf("monthly note = %q, want no cookie-expired hint", ws[2].Note)
+		t.Fatalf("monthly note = %q, want login hint, not stale-cookie hint", ws[2].Note)
 	}
 }
 

@@ -90,6 +90,11 @@ const (
 // usage — the opencode.ai session has expired or been logged out.
 const staleCookieNote = "server data unavailable — cookie expired, re-import with 'plan-usage opencode-cookie import'"
 
+// loginHintNote is appended to the local-fallback monthly bar when there is
+// no session cookie anywhere: the user must log in at opencode.ai (or paste
+// a cookie) before the live server percentages can load.
+const loginHintNote = "server data unavailable — log in at opencode.ai to enable live usage"
+
 // IsConfigured: configured if auth.json has an `opencode-go` entry OR
 // we can read the local opencode.db with cost data.
 func (p *Provider) IsConfigured() error {
@@ -183,7 +188,9 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 		if stale {
 			p.lastServerErr = staleCookieNote
 		} else {
-			p.lastServerErr = ""
+			// No cookie anywhere: the card should tell the user to log in
+			// at opencode.ai (or paste a cookie) to enable live usage.
+			p.lastServerErr = loginHintNote
 		}
 	}
 	p.mu.Unlock()
