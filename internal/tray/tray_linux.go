@@ -512,16 +512,24 @@ func (p *popup) toggleProvider(name string, item *systray.MenuItem) {
 // without a restart. The context-menu checkboxes are re-synced under
 // menuMu so they never race a concurrent click handler; menuMu is taken
 // before the config lock (matching toggleProvider) to avoid ABBA.
+//
+// config.Load is performed *under* menuMu (not before it). If the disk read
+// happened outside the lock, a concurrent toggleProvider could write the new
+// allowlist to disk + memory between the read and the ApplyFresh below;
+// ApplyFresh would then overwrite memory with the stale snapshot, and a
+// later toggle would persist that reverted state -- silently dropping the
+// user's selection. Holding menuMu across the load makes read+apply atomic
+// with respect to toggleProvider.
 func (p *popup) reloadConfig() {
 	if p.cfg.ConfigPath == "" {
 		return
 	}
+	p.menuMu.Lock()
+	defer p.menuMu.Unlock()
 	fresh, err := config.Load(p.cfg.ConfigPath)
 	if err != nil {
 		return
 	}
-	p.menuMu.Lock()
-	defer p.menuMu.Unlock()
 	p.cfg.ApplyFresh(fresh)
 	for i, name := range providers.AllNames() {
 		if i >= len(p.toggleItems) {

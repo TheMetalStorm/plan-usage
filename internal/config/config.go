@@ -119,6 +119,12 @@ func (c *Config) enabledSetLocked(allNames []string) map[string]bool {
 // materialized so an exclusion is actually recorded on disk. The write
 // happens under the config lock so concurrent refresh readers never observe
 // a partially-updated allowlist.
+//
+// The in-memory allowlist is only committed once the disk write succeeds.
+// If the write fails, c.Enabled is rolled back to its previous value so the
+// running process never shows a provider as toggled when the change was not
+// actually persisted -- otherwise the UI would reflect the new selection
+// during the session while the next restart silently reverted it.
 func (c *Config) SetProviderEnabled(allNames []string, name string, enabled bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -128,12 +134,22 @@ func (c *Config) SetProviderEnabled(allNames []string, name string, enabled bool
 	} else {
 		delete(set, name)
 	}
-	c.Enabled = orderedEnabled(allNames, c.Enabled, set)
-	if c.ConfigPath == "" {
+	next := orderedEnabled(allNames, c.Enabled, set)
+	path := c.ConfigPath
+	if path == "" {
 		home, _ := os.UserHomeDir()
-		c.ConfigPath = filepath.Join(home, DefaultPath)
+		path = filepath.Join(home, DefaultPath)
 	}
-	return c.writePathLocked(c.ConfigPath)
+	prev := c.Enabled
+	c.Enabled = next
+	if err := c.writePathLocked(path); err != nil {
+		// Roll back the in-memory allowlist so it stays in sync with the
+		// (unchanged) on-disk config; a failed write must not look applied.
+		c.Enabled = prev
+		return err
+	}
+	c.ConfigPath = path
+	return nil
 }
 
 // orderedEnabled returns the enabled names in registry order, followed by
