@@ -59,7 +59,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		return runInitStatus(scanned.cmdArgs, stdout, stderr)
 
 	case "opencode-cookie":
-		return runCookieStatus(scanned.cmdArgs, stdout, stderr)
+		return runCookieStatus(scanned.cmdArgs, os.Stdin, stdout, stderr)
 
 	case "version", "-v", "--version":
 		fmt.Fprintln(stdout, "plan-usage", version)
@@ -216,8 +216,8 @@ func runInitStatus(args []string, stdout, stderr io.Writer) int {
 }
 
 // runCookieStatus mirrors runInitStatus for the opencode-cookie subcommand.
-func runCookieStatus(args []string, stdout, stderr io.Writer) int {
-	if err := runCookie(args, stdout, stderr); err != nil {
+func runCookieStatus(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if err := runCookie(args, stdin, stdout, stderr); err != nil {
 		return 1
 	}
 	return 0

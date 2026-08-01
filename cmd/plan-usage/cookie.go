@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/TheMetalStorm/plan-usage/internal/opencodeutil"
@@ -11,7 +12,7 @@ import (
 // runCookie reads or writes the OpenCode AI session cookie cache used by
 // the opencodego provider's server-side usage overlay. The raw cookie value
 // is never printed back to the terminal.
-func runCookie(args []string, stdout, stderr io.Writer) error {
+func runCookie(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cc, err := opencodeutil.NewCookieCache()
 	if err != nil {
 		return fmt.Errorf("cookie cache: %w", err)
@@ -31,12 +32,28 @@ func runCookie(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	if len(args) > 0 && args[0] != "" {
-		if err := cc.Write(&opencodeutil.CacheCookie{Source: "cli", Cookie: args[0], CachedAt: time.Now()}); err != nil {
-			return fmt.Errorf("write cookie: %w", err)
+	if len(args) > 0 {
+		switch args[0] {
+		case "import", "-i":
+			return runCookieImport(cc, stdout)
+		case "-":
+			value, err := readStdinValue(stdin)
+			if err != nil {
+				return err
+			}
+			if err := cc.Write(&opencodeutil.CacheCookie{Source: "cli", Cookie: value, CachedAt: time.Now()}); err != nil {
+				return fmt.Errorf("write cookie: %w", err)
+			}
+			fmt.Fprintln(stdout, "opencode cookie saved")
+			return nil
 		}
-		fmt.Fprintln(stdout, "opencode cookie saved")
-		return nil
+		if args[0] != "" {
+			if err := cc.Write(&opencodeutil.CacheCookie{Source: "cli", Cookie: args[0], CachedAt: time.Now()}); err != nil {
+				return fmt.Errorf("write cookie: %w", err)
+			}
+			fmt.Fprintln(stdout, "opencode cookie saved")
+			return nil
+		}
 	}
 
 	// No value: report cache state without leaking the session secret.
@@ -53,8 +70,41 @@ func runCookie(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// runCookieImport pulls the opencode.ai auth cookie out of the browser
+// cookie stores and caches it. It never prints the cookie value.
+func runCookieImport(cc *opencodeutil.CookieCache, stdout io.Writer) error {
+	value, err := opencodeutil.ImportOpenCodeCookie()
+	if err != nil {
+		return err
+	}
+	if value == "" {
+		fmt.Fprintln(stdout, "no opencode.ai auth cookie found in browser cookies — log in at opencode.ai, then re-run 'plan-usage opencode-cookie import', or paste the cookie with 'plan-usage opencode-cookie -'")
+		return nil
+	}
+	if err := cc.Write(&opencodeutil.CacheCookie{Source: "chrome-import", Cookie: value, CachedAt: time.Now()}); err != nil {
+		return fmt.Errorf("write cookie: %w", err)
+	}
+	fmt.Fprintln(stdout, "opencode cookie imported from browser cookie store")
+	return nil
+}
+
+// readStdinValue reads one cookie value from stdin, trimming surrounding
+// whitespace/newlines.
+func readStdinValue(stdin io.Reader) (string, error) {
+	if stdin == nil {
+		return "", fmt.Errorf("read cookie: no stdin reader")
+	}
+	raw, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", fmt.Errorf("read cookie from stdin: %w", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
 const cookieUsage = `usage:
   plan-usage opencode-cookie "<cookie value>"   store the opencode.ai auth cookie
+  plan-usage opencode-cookie import             import the auth cookie from the browser (Chrome-family)
+  plan-usage opencode-cookie -                  store the auth cookie read from stdin
   plan-usage opencode-cookie --clear            remove the cached cookie
   plan-usage opencode-cookie                    show cache state (never the value)
 
@@ -63,4 +113,8 @@ monthly) from opencode.ai. The _server endpoint only accepts a browser
 session cookie — the "auth" cookie for opencode.ai (Chrome DevTools ->
 Application -> Cookies -> https://opencode.ai). Without it the card falls
 back to local opencode.db cost estimates (labeled "local costs ...").
+
+Import re-reads the cookie from your browser, and the tray/daemon does the
+same automatically whenever no cookie is cached, so you only need to stay
+logged in at opencode.ai.
 `

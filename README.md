@@ -175,13 +175,23 @@ from the opencode.ai `_server` endpoint, which only accepts a browser
 
 To enable live server data:
 
-1. Log in at <https://opencode.ai> in your browser.
-2. Open DevTools → Application → Cookies → `https://opencode.ai` and copy
-   the value of the `auth` cookie.
-3. Store it (never share it — it is a session secret):
+1. Log in at <https://opencode.ai> in your browser (Chrome, Chromium,
+   Brave, or Edge).
+2. Import the `auth` cookie with a single command (never share it — it is
+   a session secret):
 
    ```bash
-   plan-usage opencode-cookie "<auth cookie value>"
+   plan-usage opencode-cookie import
+   ```
+
+   This reads the cookie directly from the browser's cookie store (the
+   tray/daemon also does this automatically whenever no cookie is cached,
+   so you only need to stay logged in at opencode.ai). If you use a
+   different browser, or want to paste it in, use one of:
+
+   ```bash
+   plan-usage opencode-cookie -                      # read the value from stdin
+   plan-usage opencode-cookie "<auth cookie value>"  # store it directly
    ```
 
 `plan-usage opencode-cookie` prints the cache state (source and cache time,
@@ -194,7 +204,9 @@ percentages and reset times. If the cookie is missing or expired, the card
 falls back to **local estimates** computed from
 `$XDG_DATA_HOME/opencode/opencode.db` — labeled "local costs …" and
 counting only sessions started in `opencode` on this machine (sessions
-started through other agents, or on other devices, are not included).
+started through other agents, or on other devices, are not included). When
+a stored cookie goes stale, the card shows a "cookie expired" hint so you
+know to re-import (or log back in at opencode.ai).
 
 ## Commands
 
@@ -202,7 +214,7 @@ started through other agents, or on other devices, are not included).
 |---|---|
 | `plan-usage show` | Open the interactive TUI dashboard. |
 | `plan-usage tray` | Run the Linux/X11 native tray and GTK popup. |
-| `plan-usage opencode-cookie [<value>\|--clear]` | Store/clear the opencode.ai auth cookie for live OpenCode Go usage. |
+| `plan-usage opencode-cookie [import\|-\|<value>\|--clear]` | Store/clear/import the opencode.ai auth cookie for live OpenCode Go usage. |
 | `plan-usage version` | Print version information. |
 
 Global flags include `--config PATH`, `--state-dir PATH`, `--debug`, and
