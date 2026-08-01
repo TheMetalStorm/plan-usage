@@ -165,12 +165,44 @@ using `Daemon.Refresh(context.Context)` and atomically writes
 when started, so running `plan-usage tray` alongside `plan-usage show`
 gives you live data without a separate poller.
 
+## OpenCode Go live usage (server data)
+
+The OpenCode Go card shows three windows — 5h rolling, weekly, and monthly —
+which are **server-side** windows billed by opencode.ai. The most accurate
+numbers are the ones the opencode.ai console shows. `plan-usage` reads them
+from the opencode.ai `_server` endpoint, which only accepts a browser
+**session cookie** for `opencode.ai` (API keys are not accepted there).
+
+To enable live server data:
+
+1. Log in at <https://opencode.ai> in your browser.
+2. Open DevTools → Application → Cookies → `https://opencode.ai` and copy
+   the value of the `auth` cookie.
+3. Store it (never share it — it is a session secret):
+
+   ```bash
+   plan-usage opencode-cookie "<auth cookie value>"
+   ```
+
+`plan-usage opencode-cookie` prints the cache state (source and cache time,
+**never** the cookie value); `plan-usage opencode-cookie --clear` removes
+it.
+
+While the server data is fresh (fetched on each tray/TUI refresh and cached
+for up to 10 minutes), all three bars show the authoritative server
+percentages and reset times. If the cookie is missing or expired, the card
+falls back to **local estimates** computed from
+`$XDG_DATA_HOME/opencode/opencode.db` — labeled "local costs …" and
+counting only sessions started in `opencode` on this machine (sessions
+started through other agents, or on other devices, are not included).
+
 ## Commands
 
 | command | purpose |
 |---|---|
 | `plan-usage show` | Open the interactive TUI dashboard. |
 | `plan-usage tray` | Run the Linux/X11 native tray and GTK popup. |
+| `plan-usage opencode-cookie [<value>\|--clear]` | Store/clear the opencode.ai auth cookie for live OpenCode Go usage. |
 | `plan-usage version` | Print version information. |
 
 Global flags include `--config PATH`, `--state-dir PATH`, `--debug`, and
