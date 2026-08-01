@@ -196,3 +196,66 @@ func TestApplyFreshFloorsRefreshInterval(t *testing.T) {
 		t.Fatalf("RefreshEvery = %s, want the old 1m (sub-5s fresh values ignored)", cfg.RefreshEvery)
 	}
 }
+
+// TestSetProviderEnabledRevertsInMemoryOnWriteFailure locks in the fix for
+// the "toggle works during the session but is lost on restart" bug: when the
+// disk write fails, the in-memory allowlist must roll back so the running
+// process never advertises a selection that was not persisted. The config
+// path's parent is a regular file, so MkdirAll (and therefore the write)
+// cannot succeed.
+func TestSetProviderEnabledRevertsInMemoryOnWriteFailure(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "notadir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{ConfigPath: filepath.Join(blocker, "config.yaml")}
+	before := cfg.IsProviderEnabled("codex")
+	if err := cfg.SetProviderEnabled(testAllNames, "codex", false); err == nil {
+		t.Fatal("SetProviderEnabled must fail when the config path is not writable")
+	}
+	if cfg.IsProviderEnabled("codex") != before {
+		t.Fatalf("in-memory allowlist changed after a failed write: codex enabled = %v, want %v",
+			cfg.IsProviderEnabled("codex"), before)
+	}
+}
+
+// TestSetProviderEnabledSurvivesReloadSequence simulates the full
+// tray/TUI lifecycle -- several toggles followed by a process restart that
+// reloads the config from the same path -- and asserts every selection
+// survives. This is the regression test for the persistence bug where
+// selections made during a session were lost on the next program start.
+func TestSetProviderEnabledSurvivesReloadSequence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := Load(path) // no file yet -> defaults, default-on
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetProviderEnabled(testAllNames, "codex", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetProviderEnabled(testAllNames, "freebuff", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetProviderEnabled(testAllNames, "clinepass", true); err != nil {
+		t.Fatal(err) // no-op toggle of an already-enabled provider
+	}
+
+	// Simulate closing and reopening the program: reload from disk.
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEnabled := map[string]bool{
+		"opencodego":  true,
+		"codex":       false,
+		"clinepass":   true,
+		"commandcode": true,
+		"freebuff":    false,
+	}
+	for _, name := range testAllNames {
+		if got := reloaded.IsProviderEnabled(name); got != wantEnabled[name] {
+			t.Fatalf("after restart %s enabled = %v, want %v (Enabled = %v)",
+				name, got, wantEnabled[name], reloaded.Enabled)
+		}
+	}
+}
