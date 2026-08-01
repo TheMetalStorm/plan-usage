@@ -42,6 +42,7 @@ import (
 	"fyne.io/systray"
 	"github.com/TheMetalStorm/plan-usage/internal/config"
 	"github.com/TheMetalStorm/plan-usage/internal/daemon"
+	"github.com/TheMetalStorm/plan-usage/internal/providers"
 	"github.com/TheMetalStorm/plan-usage/internal/state"
 	"github.com/TheMetalStorm/plan-usage/internal/types"
 	"github.com/gotk3/gotk3/gdk"
@@ -115,6 +116,29 @@ func Run(cfg *config.Config) error {
 		systray.SetOnSecondaryTapped(func() {})
 		refreshItem := systray.AddMenuItem("Refresh now", "Refresh all enabled providers")
 		quitItem := systray.AddMenuItem("Quit", "Exit plan-usage")
+		systray.AddSeparator()
+		toggleMenu := systray.AddMenuItem("Toggle providers", "Choose which providers appear in the tray popup")
+		popup.menuMu.Lock()
+		popup.toggleItems = popup.toggleItems[:0]
+		for _, name := range providers.AllNames() {
+			name := name
+			display := name
+			if p, err := providers.Get(name); err == nil && p.DisplayName() != "" {
+				display = p.DisplayName()
+			}
+			item := toggleMenu.AddSubMenuItemCheckbox(
+				display,
+				"Show or hide "+display+" in the tray popup",
+				cfg.IsProviderEnabled(name),
+			)
+			popup.toggleItems = append(popup.toggleItems, item)
+			go func(item *systray.MenuItem) {
+				for range item.ClickedCh {
+					popup.toggleProvider(name, item)
+				}
+			}(item)
+		}
+		popup.menuMu.Unlock()
 		go func() {
 			for {
 				select {
@@ -168,6 +192,13 @@ type popup struct {
 	stopMu     sync.RWMutex
 	stopped    bool
 
+	// menuMu serializes the systray provider checkboxes: the click
+	// handler mutates cfg + checkbox state, and reloadConfig re-syncs
+	// checkbox state after a config reload. Without it the vendored
+	// systray MenuItem bool fields would race under the race detector.
+	menuMu      sync.Mutex
+	toggleItems []*systray.MenuItem
+
 	// lastNetworkErr is set after every refresh and drives the accelerated
 	// retry cadence in refreshLoop while a provider looks network-blocked.
 	lastNetworkErr atomic.Bool
@@ -210,6 +241,15 @@ func newPopup(cfg *config.Config, poller *daemon.Daemon, store *state.Store, dis
 		return nil, err
 	}
 	closeButton.SetName("hide-button")
+	// The seat grab gives the popup window input focus. A GtkButton grabs
+	// focus on mouse click by default (focus-on-click), which moves focus
+	// from the window to the button and synthesizes a focus-out-event on the
+	// window; the popup's focus-out handler would then hide the popup on a
+	// plain Refresh click. Disable click-to-focus so clicking inside the
+	// popup never shifts focus and never dismisses it. Keyboard focus (Tab)
+	// still reaches the buttons because can-focus stays enabled.
+	refresh.SetFocusOnClick(false)
+	closeButton.SetFocusOnClick(false)
 	header.PackStart(title, true, true, 0)
 	header.PackEnd(closeButton, false, false, 0)
 	header.PackEnd(refresh, false, false, 0)
@@ -445,6 +485,56 @@ func (p *popup) requestRefresh() {
 	}()
 }
 
+// toggleProvider flips the enabled state for one provider from the tray
+// context menu, persists it, keeps the checkbox in sync, and refreshes so
+// the popup re-renders with the new selection. The next render() reads the
+// live cfg, so even an in-flight refresh renders the updated selection.
+func (p *popup) toggleProvider(name string, item *systray.MenuItem) {
+	p.menuMu.Lock()
+	defer p.menuMu.Unlock()
+	want := !p.cfg.IsProviderEnabled(name)
+	if err := p.cfg.SetProviderEnabled(providers.AllNames(), name, want); err != nil {
+		_ = p.runOnGTK(func() {
+			p.status.SetText("Could not save provider setting: " + err.Error())
+		})
+		return
+	}
+	if want {
+		item.Check()
+	} else {
+		item.Uncheck()
+	}
+	p.requestRefresh()
+}
+
+// reloadConfig picks up config changes made by another process (e.g. the
+// TUI's provider toggles) so the tray converges within one refresh cycle
+// without a restart. The context-menu checkboxes are re-synced under
+// menuMu so they never race a concurrent click handler; menuMu is taken
+// before the config lock (matching toggleProvider) to avoid ABBA.
+func (p *popup) reloadConfig() {
+	if p.cfg.ConfigPath == "" {
+		return
+	}
+	fresh, err := config.Load(p.cfg.ConfigPath)
+	if err != nil {
+		return
+	}
+	p.menuMu.Lock()
+	defer p.menuMu.Unlock()
+	p.cfg.ApplyFresh(fresh)
+	for i, name := range providers.AllNames() {
+		if i >= len(p.toggleItems) {
+			break
+		}
+		if p.cfg.IsProviderEnabled(name) {
+			p.toggleItems[i].Check()
+		} else {
+			p.toggleItems[i].Uncheck()
+		}
+	}
+}
+
 func (p *popup) refreshLoop(ctx context.Context) {
 	for {
 		interval := p.cfg.RefreshEvery
@@ -458,6 +548,7 @@ func (p *popup) refreshLoop(ctx context.Context) {
 		timer := time.NewTimer(interval)
 		select {
 		case <-timer.C:
+			p.reloadConfig()
 			p.requestRefresh()
 		case <-ctx.Done():
 			if !timer.Stop() {

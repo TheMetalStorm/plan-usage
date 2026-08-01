@@ -21,8 +21,13 @@ ClinePass, CommandCode, and Freebuff. Choose the interactive TUI
   cards. Each card includes provider name/icon, status or authentication error,
   every usage window, progress, percent, used/total, reset information, notes,
   last update time, and the free model catalog below the usage details when
-  one is available. Free model names wrap inside the popup. The tray
-  deliberately shows **no provider selector**.
+  one is available. Free model names wrap inside the popup. The tray context
+  menu (right-click) has a **Toggle providers** submenu with one checkbox per
+  provider, so the visible set can be changed without touching the config file.
+- **Provider visibility toggles in both surfaces** — the TUI's `x` picker and
+  the tray's context-menu checkboxes write the same `enabled` allowlist, so
+  the selection is shared, persists across restarts, and controls which
+  providers are refreshed and rendered.
 - **Refresh now** in the popup and tray context menu, with timer/manual refresh
   requests serialized so only one provider refresh runs at a time.
 - **Escape, focus loss, outside click, or another tray click** hides the popup.
@@ -132,8 +137,9 @@ plan-usage tray
 ```
 
 Left-clicking the tray icon toggles the popup. Right-clicking opens the tray
-menu with **Refresh now** and **Quit**. The popup also has **Refresh** and
-**Hide** buttons. It is a GTK `WINDOW_POPUP`, not a normal top-level window;
+menu with **Refresh now**, one **Show <Provider>** checkbox per provider, and
+**Quit**. The popup also has **Refresh** and **Hide** buttons. It is a GTK
+`WINDOW_POPUP`, not a normal top-level window;
 under X11 this is an override-redirect popup, so i3 does not create or manage a
 new container for it. The popup is kept inside the work area of the monitor
 containing the pointer. If the screen is too short for all cards, the cards
@@ -247,6 +253,27 @@ shows a separate **Premium models (free for 6h/day)** section because those
 models can be used within the daily free allowance. Premium-only entries for
 other providers are not shown in the tray. Reset timestamps are shown when a
 provider supplies them, with a clear unavailable marker otherwise.
+
+### Provider visibility
+
+Both surfaces can select which providers are shown, and both write the same
+`enabled` allowlist shown above, so the choice persists and applies to the
+next launch of the other surface:
+
+- **TUI (`plan-usage show`)** — press `x` to open the provider picker. Every
+  registered provider is listed with `[x]`/`[ ]`; `space`/`enter` toggles the
+  highlighted provider (saved immediately), `esc`/`x` returns to the list.
+- **Tray** — right-click the tray icon, hover **Toggle providers**, and
+  tick/untick the provider entries. The popup re-renders immediately. The tray
+  also reloads
+  `config.yaml` on every refresh cycle, so a toggle made in a concurrently
+  running TUI is picked up within one refresh interval (the TUI reads the
+  config at startup, so a tray-side toggle applies on the next `show`).
+
+The first toggle materializes `enabled` from the default-on registry order if
+the key was absent, so an exclusion is actually recorded on disk. When two
+processes toggle at once, the last write wins. Toggling a provider off also
+stops it from being queried; toggling it on again resumes polling.
 
 ## Architecture and privacy
 

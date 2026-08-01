@@ -1,13 +1,19 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/TheMetalStorm/plan-usage/internal/config"
+	"github.com/TheMetalStorm/plan-usage/internal/debug"
+	"github.com/TheMetalStorm/plan-usage/internal/providers"
+	"github.com/TheMetalStorm/plan-usage/internal/state"
 	"github.com/TheMetalStorm/plan-usage/internal/types"
 )
 
@@ -135,5 +141,202 @@ func TestTruncateDisplayUsesTerminalWidth(t *testing.T) {
 	}
 	if got := truncateDisplay("界界界", 3); lipgloss.Width(got) > 3 {
 		t.Fatalf("truncateDisplay() wide-character width = %d, want <= 3 (%q)", lipgloss.Width(got), got)
+	}
+}
+
+func TestPickerRenderShowsAllProvidersWithCheckboxes(t *testing.T) {
+	cfg := &config.Config{Enabled: []string{"codex"}}
+	m := &Model{cfg: cfg, allNames: providers.AllNames(), picker: true, selected: 0, pending: map[string]bool{}}
+	got := ansi.Strip(m.renderList(30))
+	for _, want := range []string{
+		"SHOW/HIDE PROVIDERS",
+		"[x] Codex / ChatGPT",
+		"[ ] OpenCode Go",
+		"[ ] Cline Pass",
+		"[ ] Command Code",
+		"[ ] Freebuff",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("picker list missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestToggleSelectedProviderHidesFromItems(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{ConfigPath: path}
+	cfg.Defaults()
+	m := &Model{cfg: cfg, log: debug.New(64), pending: map[string]bool{}, allNames: providers.AllNames()}
+	m.rebuildItems()
+	if len(m.items) != len(m.allNames) {
+		t.Fatalf("initial items = %d, want %d", len(m.items), len(m.allNames))
+	}
+	for i, s := range m.items {
+		if s.Provider == "codex" {
+			m.selected = i
+		}
+	}
+	cmd := m.toggleSelectedCmd()
+	if cmd == nil {
+		t.Fatal("toggleSelectedCmd() returned nil")
+	}
+	msg := cmd()
+	tm, ok := msg.(toggleDoneMsg)
+	if !ok {
+		t.Fatalf("cmd() = %#v, want toggleDoneMsg", msg)
+	}
+	if tm.name != "codex" || tm.enabled {
+		t.Fatalf("toggleDoneMsg = %#v, want codex hidden", tm)
+	}
+	m.Update(tm)
+	for _, s := range m.items {
+		if s.Provider == "codex" {
+			t.Fatal("codex still listed after hiding")
+		}
+	}
+	if cfg.IsProviderEnabled("codex") {
+		t.Fatal("codex still enabled after toggle")
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.IsProviderEnabled("codex") {
+		t.Fatal("disk config still enables codex after toggle")
+	}
+}
+
+func TestToggleSelectedProviderShowsAgainFromPicker(t *testing.T) {
+	cfg := &config.Config{Enabled: []string{"freebuff"}}
+	m := &Model{cfg: cfg, log: debug.New(64), pending: map[string]bool{}, allNames: providers.AllNames()}
+	m.rebuildItems()
+	if len(m.items) != 1 {
+		t.Fatalf("items = %d, want only the one enabled provider", len(m.items))
+	}
+	// Picker walks the full registry; select the hidden codex.
+	m.picker = true
+	for i, name := range m.allNames {
+		if name == "codex" {
+			m.selected = i
+		}
+	}
+	cmd := m.toggleSelectedCmd()
+	if cmd == nil {
+		t.Fatal("toggleSelectedCmd() returned nil")
+	}
+	msg := cmd()
+	tm, ok := msg.(toggleDoneMsg)
+	if !ok || !tm.enabled || tm.name != "codex" {
+		t.Fatalf("cmd() = %#v, want codex shown", msg)
+	}
+	m.Update(tm)
+	if !cfg.IsProviderEnabled("codex") {
+		t.Fatal("codex should be enabled after showing")
+	}
+	found := false
+	for _, s := range m.items {
+		if s.Provider == "codex" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("codex not re-added to the list after showing")
+	}
+}
+
+func TestRebuildItemsFiltersDisabledProviders(t *testing.T) {
+	store, err := state.New(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := types.Aggregate{Providers: map[string]types.Snapshot{
+		"codex":    {DisplayName: "Codex / ChatGPT", Icon: "C"},
+		"freebuff": {DisplayName: "Freebuff", Icon: "F"},
+	}}
+	if err := store.Replace(agg); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Enabled: []string{"codex"}}
+	m := &Model{cfg: cfg, store: store, allNames: providers.AllNames()}
+	m.rebuildItems()
+	if len(m.items) != 1 || m.items[0].Provider != "codex" {
+		t.Fatalf("items = %#v, want only codex", m.items)
+	}
+}
+
+func TestPickerModeSelectionClamping(t *testing.T) {
+	cfg := &config.Config{Enabled: []string{"codex"}}
+	m := &Model{cfg: cfg, allNames: providers.AllNames(), pending: map[string]bool{}}
+	m.rebuildItems()
+	if m.selected != 0 {
+		t.Fatalf("selected = %d, want 0 after rebuild", m.selected)
+	}
+	m.enterPicker()
+	if !m.picker {
+		t.Fatal("picker not entered")
+	}
+	if len(m.allNames) < 3 {
+		t.Fatal("test needs several registered providers")
+	}
+	m.selected = len(m.allNames) - 1
+	m.picker = false
+	m.clampSelectedToItems()
+	if m.selected >= len(m.items) {
+		t.Fatalf("selected = %d after exit, want < %d (items)", m.selected, len(m.items))
+	}
+}
+
+func TestPickerFooterAndNormalFooterHints(t *testing.T) {
+	m := &Model{picker: true}
+	if got := m.renderFooter(); !strings.Contains(got, "space/enter toggle") {
+		t.Fatalf("picker footer = %q, want toggle hint", got)
+	}
+	m.picker = false
+	if got := m.renderFooter(); !strings.Contains(got, "x show/hide") {
+		t.Fatalf("normal footer = %q, want show/hide hint", got)
+	}
+}
+
+func TestPickerDetailShowsHiddenProvider(t *testing.T) {
+	cfg := &config.Config{Enabled: []string{"codex"}}
+	m := &Model{cfg: cfg, allNames: providers.AllNames(), picker: true, pending: map[string]bool{}}
+	m.rebuildItems()
+	for i, name := range m.allNames {
+		if name == "freebuff" {
+			m.selected = i
+		}
+	}
+	got := ansi.Strip(m.renderDetail(30))
+	if !strings.Contains(got, "Freebuff") {
+		t.Fatalf("picker detail for a hidden provider = %q, want its display name", got)
+	}
+}
+
+func TestPickerSpaceKeyTogglesSelectedProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{ConfigPath: path}
+	cfg.Defaults()
+	m := &Model{
+		cfg:      cfg,
+		log:      debug.New(64),
+		pending:  map[string]bool{},
+		allNames: providers.AllNames(),
+		picker:   true,
+	}
+	m.rebuildItems()
+	for i, name := range m.allNames {
+		if name == "codex" {
+			m.selected = i
+		}
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if cmd == nil {
+		t.Fatal("space key did not return a toggle command")
+	}
+	msg := cmd()
+	toggled, ok := msg.(toggleDoneMsg)
+	if !ok || toggled.name != "codex" || toggled.enabled {
+		t.Fatalf("space command result = %#v, want codex hidden", msg)
 	}
 }
