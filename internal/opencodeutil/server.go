@@ -16,8 +16,11 @@ import (
 
 // Server function IDs (SHA-256 hashes published by opencode.ai).
 const (
-	FuncWorkspaces      = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
-	FuncSubscriptionGet = "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4"
+	FuncWorkspaces = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
+	// FuncSubscriptionGet is the OpenCode Go/Lite subscription query used by
+	// /workspace/:id/go. The Black subscription.get function returns null for
+	// Go plans even when the session is authenticated.
+	FuncSubscriptionGet = "c7389bd0e731f80f49593e5ee53835475f4e28594dd6bd83eb229bab753498cd"
 	serverBase          = "https://opencode.ai/_server"
 	serverOrigin        = "https://opencode.ai"
 	chromeUA            = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"

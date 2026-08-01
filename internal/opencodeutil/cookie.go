@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -79,6 +80,19 @@ func (c *CookieCache) Cookie() string {
 // AttachToRequest sets the Cookie header on an outgoing request from cache.
 func (c *CookieCache) AttachToRequest(req *http.Request) {
 	if cc, _ := c.Read(); cc != nil && cc.Cookie != "" {
-		req.Header.Set("Cookie", cc.Cookie)
+		if value := cookieHeaderValue(cc.Cookie); value != "" {
+			req.Header.Set("Cookie", value)
+		}
 	}
+}
+
+// cookieHeaderValue turns the bare auth value stored by browsers into a valid
+// HTTP Cookie header. Complete Cookie header strings pass through unchanged
+// for compatibility with values captured from browser DevTools.
+func cookieHeaderValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, "=") {
+		return value
+	}
+	return "auth=" + value
 }
