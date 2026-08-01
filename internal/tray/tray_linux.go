@@ -210,6 +210,15 @@ func newPopup(cfg *config.Config, poller *daemon.Daemon, store *state.Store, dis
 		return nil, err
 	}
 	closeButton.SetName("hide-button")
+	// The seat grab gives the popup window input focus. A GtkButton grabs
+	// focus on mouse click by default (focus-on-click), which moves focus
+	// from the window to the button and synthesizes a focus-out-event on the
+	// window; the popup's focus-out handler would then hide the popup on a
+	// plain Refresh click. Disable click-to-focus so clicking inside the
+	// popup never shifts focus and never dismisses it. Keyboard focus (Tab)
+	// still reaches the buttons because can-focus stays enabled.
+	refresh.SetFocusOnClick(false)
+	closeButton.SetFocusOnClick(false)
 	header.PackStart(title, true, true, 0)
 	header.PackEnd(closeButton, false, false, 0)
 	header.PackEnd(refresh, false, false, 0)
