@@ -12,12 +12,19 @@ import (
 
 // DailyCost holds one day's cost/usage summary from the local opencode.db.
 type DailyCost struct {
-	Date     string  // "2006-01-02"
-	Cost     float64 // total cost for the day
-	Sessions int     // number of sessions
-	TokensIn int64   // input tokens
-	TokensOut int64  // output tokens
+	Date      string  // "2006-01-02"
+	Cost      float64 // total cost for the day
+	Sessions  int     // number of sessions
+	TokensIn  int64   // input tokens
+	TokensOut int64   // output tokens
 }
+
+// goProviderFilter restricts the cost queries to OpenCode Go sessions.
+// The session.model column stores a JSON object with a providerID field
+// (e.g. {"id":"glm-5.2","providerID":"opencode-go","variant":"default"}),
+// so other providers' sessions (opencode/Zen, cline-pass, ...) never
+// count toward the Go plan bars.
+const goProviderFilter = ` AND json_extract(model, '$.providerID') = 'opencode-go'`
 
 // OpenCodeDB wraps a connection to the local opencode.sqlite database.
 type OpenCodeDB struct {
@@ -93,6 +100,7 @@ func (o *OpenCodeDB) DailyCostHistory(days int) ([]DailyCost, error) {
 		WHERE cost IS NOT NULL
 		  AND time_created > ?
 		  AND time_created > 0
+		` + goProviderFilter + `
 		GROUP BY day
 		ORDER BY day DESC
 	`
@@ -126,7 +134,7 @@ func (o *OpenCodeDB) TotalCostSince(sinceMs int64) (float64, error) {
 	if o.db == nil {
 		return 0, nil
 	}
-	query := `SELECT COALESCE(SUM(cost), 0) FROM session WHERE time_created > ? AND time_created > 0`
+	query := `SELECT COALESCE(SUM(cost), 0) FROM session WHERE time_created > ? AND time_created > 0` + goProviderFilter
 	var total float64
 	if err := o.db.QueryRow(query, sinceMs).Scan(&total); err != nil {
 		return 0, fmt.Errorf("total cost query: %w", err)
@@ -140,7 +148,7 @@ func (o *OpenCodeDB) EarliestSessionTime() (int64, error) {
 	if o.db == nil {
 		return 0, nil
 	}
-	query := `SELECT COALESCE(MIN(time_created), 0) FROM session WHERE cost IS NOT NULL AND cost > 0 AND time_created > 0`
+	query := `SELECT COALESCE(MIN(time_created), 0) FROM session WHERE cost IS NOT NULL AND cost > 0 AND time_created > 0` + goProviderFilter
 	var ts int64
 	if err := o.db.QueryRow(query).Scan(&ts); err != nil {
 		return 0, fmt.Errorf("earliest session: %w", err)
@@ -154,7 +162,7 @@ func (o *OpenCodeDB) CostInWindow(startMs, endMs int64) (float64, error) {
 	if o.db == nil {
 		return 0, nil
 	}
-	query := `SELECT COALESCE(SUM(cost), 0) FROM session WHERE time_created >= ? AND time_created < ? AND time_created > 0`
+	query := `SELECT COALESCE(SUM(cost), 0) FROM session WHERE time_created >= ? AND time_created < ? AND time_created > 0` + goProviderFilter
 	var total float64
 	if err := o.db.QueryRow(query, startMs, endMs).Scan(&total); err != nil {
 		return 0, fmt.Errorf("cost in window: %w", err)
