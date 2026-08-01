@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/TheMetalStorm/plan-usage/internal/auth"
@@ -40,6 +41,11 @@ type Provider struct {
 	apiKey string // resolved Bearer token
 	db     *opencodeutil.OpenCodeDB
 	probe  *probe.Client
+
+	mu            sync.Mutex
+	lastServer    *opencodeutil.ServerUsage // cached server-side windows
+	lastServerAt  time.Time                 // when lastServer was fetched
+	lastServerErr string                    // stale-cookie hint when server data is unavailable
 }
 
 // New returns a Provider with probe initialized.
@@ -73,7 +79,21 @@ const (
 	plan5h     = 12.0
 	planWeekly = 30.0
 	planMonth  = 60.0
+
+	// serverDataTTL bounds how long the server-side windows cached by
+	// FetchUsage stay fresh for SnapshotWindows (no extra network I/O).
+	serverDataTTL = 10 * time.Minute
 )
+
+// staleCookieNote is appended to the local-fallback monthly bar when a
+// cookie existed (cached or just imported) but the server produced no
+// usage — the opencode.ai session has expired or been logged out.
+const staleCookieNote = "server data unavailable — cookie expired, re-import with 'plan-usage opencode-cookie import'"
+
+// loginHintNote is appended to the local-fallback monthly bar when there is
+// no session cookie anywhere: the user must log in at opencode.ai (or paste
+// a cookie) before the live server percentages can load.
+const loginHintNote = "server data unavailable — log in at opencode.ai to enable live usage"
 
 // IsConfigured: configured if auth.json has an `opencode-go` entry OR
 // we can read the local opencode.db with cost data.
@@ -130,9 +150,11 @@ func (p *Provider) IsConfigured() error {
 	return fmt.Errorf("opencodego: no auth.json entry for opencode-go (looked at %s) and cannot read local DB: %v", src, dbErr)
 }
 
-// FetchUsage returns the primary window (weekly costs by default, since
-// the 5h rolling window is frequently zero). The SnapshotWindows method
-// provides all three windows (5h, weekly, monthly) for multi-window UIs.
+// FetchUsage returns the primary window. When the server-side billing
+// data is available (browser session cookie cached), the primary window is
+// the most pressured server window; otherwise it falls back to the local
+// opencode.db costs. The server result is cached so SnapshotWindows can
+// render all three bars from the same data.
 func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 	// Ensure auth / DB are resolved.
 	if p.apiKey == "" && p.db == nil {
@@ -141,34 +163,149 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 
 	now := time.Now()
 
-	// Compute local costs for each window.
+	// Capture whether a cookie existed before the fetch: fetchServerUsage
+	// may auto-import one from the browser when the cache is empty.
+	hadCookie := p.haveCookie()
+
+	// Try server-side overlay for the authoritative billing percentages.
+	serverData, _ := p.fetchServerUsage(ctx)
+
+	// A cookie is present (cached or just imported) yet the server produced
+	// no usage: the session is stale. Drop it so the next refresh re-imports
+	// from the browser, and surface a hint on the local fallback.
+	stale := serverData == nil && (hadCookie || p.haveCookie())
+
+	// Cache the latest server result (or clear it on failure) so that
+	// SnapshotWindows renders server data without its own network call.
+	p.mu.Lock()
+	if serverData != nil {
+		p.lastServer = serverData
+		p.lastServerAt = now
+		p.lastServerErr = ""
+	} else {
+		p.lastServer = nil
+		p.lastServerAt = time.Time{}
+		if stale {
+			p.lastServerErr = staleCookieNote
+		} else {
+			// No cookie anywhere: the card should tell the user to log in
+			// at opencode.ai (or paste a cookie) to enable live usage.
+			p.lastServerErr = loginHintNote
+		}
+	}
+	p.mu.Unlock()
+
+	if stale {
+		p.clearCookieCache()
+	}
+
+	if serverData != nil && serverData.AnyWindow() {
+		primary := p.serverPrimary(serverData, now)
+		return &primary, nil
+	}
+
+	// No server data — use local costs.
 	cost5h := p.costSince(now.Add(-5 * time.Hour))
 	costWeekly := p.costSince(weekStart(now))
 	costMonth := p.costSince(monthStart(now))
+	primary := p.localPrimary(cost5h, costWeekly, costMonth, now)
+	return &primary, nil
+}
 
-	// Try server-side overlay for rolling percentage if we have a cookie.
-	serverData, _ := p.fetchServerUsage(ctx)
+// SnapshotWindows returns the three Go-plan windows. When the server-side
+// billing data was fetched recently (see FetchUsage), the bars show the
+// authoritative server percentages; otherwise they fall back to local
+// opencode.db costs.
+func (p *Provider) SnapshotWindows() []types.UsageStats {
+	now := time.Now()
+	if s := p.freshServerData(now); s != nil {
+		return p.serverWindows(s, now)
+	}
+	return p.localWindows(now)
+}
 
-	// Pick the most meaningful primary window.
-	// Prefer weekly (often has data), then 5h, then monthly.
-	var primary types.UsageStats
+// -- window builders --
 
-	if serverData != nil && serverData.RollingPercent > 0 {
-		// Server overlay available — show rolling percentage.
-		resetIn := time.Duration(serverData.RollingReset) * time.Second
-		primary = types.UsageStats{
-			Used:        serverData.RollingPercent,
+// freshServerData returns the cached server usage if it was fetched within
+// serverDataTTL; otherwise nil.
+func (p *Provider) freshServerData(now time.Time) *opencodeutil.ServerUsage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastServer == nil || p.lastServerAt.IsZero() {
+		return nil
+	}
+	if now.Sub(p.lastServerAt) > serverDataTTL {
+		return nil
+	}
+	return p.lastServer
+}
+
+// serverPrimary picks the most pressured server window as the primary.
+func (p *Provider) serverPrimary(s *opencodeutil.ServerUsage, now time.Time) types.UsageStats {
+	type cand struct {
+		pct   float64
+		reset int64
+		label string
+	}
+	cands := make([]cand, 0, 3)
+	if s.RollingReset > 0 {
+		cands = append(cands, cand{s.RollingPercent, s.RollingReset, "5h rolling"})
+	}
+	if s.WeeklyReset > 0 {
+		cands = append(cands, cand{s.WeeklyPercent, s.WeeklyReset, "weekly"})
+	}
+	if s.MonthlyReset > 0 {
+		cands = append(cands, cand{s.MonthlyPercent, s.MonthlyReset, "monthly"})
+	}
+	best := cands[0]
+	for _, c := range cands[1:] {
+		if c.pct > best.pct {
+			best = c
+		}
+	}
+	resetIn := time.Duration(best.reset) * time.Second
+	return types.UsageStats{
+		Used:        best.pct,
+		Total:       100,
+		Unit:        types.UnitCount,
+		WindowLabel: best.label,
+		ResetIn:     resetIn,
+		ResetAt:     now.Add(resetIn),
+		LastProbeAt: now,
+		Note:        "server usage",
+	}
+}
+
+// serverWindows builds one bar per server window that was present.
+func (p *Provider) serverWindows(s *opencodeutil.ServerUsage, now time.Time) []types.UsageStats {
+	ws := make([]types.UsageStats, 0, 3)
+	add := func(pct float64, reset int64, label string) {
+		if reset <= 0 {
+			return
+		}
+		resetIn := time.Duration(reset) * time.Second
+		ws = append(ws, types.UsageStats{
+			Used:        pct,
 			Total:       100,
 			Unit:        types.UnitCount,
-			WindowLabel: "5h rolling",
+			WindowLabel: label,
 			ResetIn:     resetIn,
 			ResetAt:     now.Add(resetIn),
 			LastProbeAt: now,
 			Note:        "server usage",
-		}
-	} else if costWeekly > 0 {
-		// Weekly local cost is non-zero — show that.
-		primary = types.UsageStats{
+		})
+	}
+	add(s.RollingPercent, s.RollingReset, "5h")
+	add(s.WeeklyPercent, s.WeeklyReset, "weekly")
+	add(s.MonthlyPercent, s.MonthlyReset, "monthly")
+	return ws
+}
+
+// localPrimary picks the most meaningful local-DB window. Weekly first
+// (often has data), then monthly, then the 5h rolling window.
+func (p *Provider) localPrimary(cost5h, costWeekly, costMonth float64, now time.Time) types.UsageStats {
+	if costWeekly > 0 {
+		return types.UsageStats{
 			Used:        costWeekly,
 			Total:       planWeekly,
 			Unit:        types.UnitUSD,
@@ -176,8 +313,9 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 			LastProbeAt: now,
 			Note:        "local costs since Sunday",
 		}
-	} else if costMonth > 0 {
-		primary = types.UsageStats{
+	}
+	if costMonth > 0 {
+		return types.UsageStats{
 			Used:        costMonth,
 			Total:       planMonth,
 			Unit:        types.UnitUSD,
@@ -185,58 +323,56 @@ func (p *Provider) FetchUsage(ctx context.Context) (*types.UsageStats, error) {
 			LastProbeAt: now,
 			Note:        "local costs since 1st",
 		}
-	} else {
-		primary = types.UsageStats{
-			Used:        cost5h,
-			Total:       plan5h,
-			Unit:        types.UnitUSD,
-			WindowLabel: "5h",
-			LastProbeAt: now,
-			Note:        "no recent paid usage — check opencode.ai/auth",
-		}
 	}
-
-	return &primary, nil
+	return types.UsageStats{
+		Used:        cost5h,
+		Total:       plan5h,
+		Unit:        types.UnitUSD,
+		WindowLabel: "5h",
+		LastProbeAt: now,
+		Note:        "no recent paid usage — check opencode.ai/auth",
+	}
 }
 
-// SnapshotWindows returns the three Go-plan windows with data from
-// the local opencode.db. The first entry is the "primary" window (5h)
-// that the TUI's compact view summarizes.
-func (p *Provider) SnapshotWindows() []types.UsageStats {
-	now := time.Now()
-
+// localWindows returns the three Go-plan windows computed from the local
+// opencode.db costs (calendar-anchored: last 5h / since Sunday / since 1st).
+func (p *Provider) localWindows(now time.Time) []types.UsageStats {
 	// Compute local costs for each window.
 	cost5h := p.costSince(now.Add(-5 * time.Hour))
 	costWeekly := p.costSince(weekStart(now))
 	costMonth := p.costSince(monthStart(now))
 
-	// Monthly history note.
+	// Monthly history note (plus the stale-cookie hint when the server
+	// produced no usage despite having a cookie).
 	historyNote := p.dailyHistoryNote(14)
+	if errNote := p.serverErrNote(); errNote != "" {
+		historyNote += "; " + errNote
+	}
 
 	return []types.UsageStats{
 		{
-			Used:         cost5h,
-			Total:        plan5h,
-			Unit:         types.UnitUSD,
-			WindowLabel:  "5h",
-			Note:         "local costs, last 5 hours",
-			LastProbeAt:  now,
+			Used:        cost5h,
+			Total:       plan5h,
+			Unit:        types.UnitUSD,
+			WindowLabel: "5h",
+			Note:        "local costs, last 5 hours",
+			LastProbeAt: now,
 		},
 		{
-			Used:         costWeekly,
-			Total:        planWeekly,
-			Unit:         types.UnitUSD,
-			WindowLabel:  "weekly",
-			Note:         "local costs since Sunday",
-			LastProbeAt:  now,
+			Used:        costWeekly,
+			Total:       planWeekly,
+			Unit:        types.UnitUSD,
+			WindowLabel: "weekly",
+			Note:        "local costs since Sunday",
+			LastProbeAt: now,
 		},
 		{
-			Used:         costMonth,
-			Total:        planMonth,
-			Unit:         types.UnitUSD,
-			WindowLabel:  "monthly",
-			Note:         historyNote,
-			LastProbeAt:  now,
+			Used:        costMonth,
+			Total:       planMonth,
+			Unit:        types.UnitUSD,
+			WindowLabel: "monthly",
+			Note:        historyNote,
+			LastProbeAt: now,
 		},
 	}
 }
@@ -265,14 +401,22 @@ func (p *Provider) dailyHistoryNote(days int) string {
 		return "local costs since 1st"
 	}
 	total := 0.0
+	sessions := 0
 	for _, d := range history {
 		total += d.Cost
+		sessions += d.Sessions
 	}
-	return fmt.Sprintf("local costs since 1st (last %d days: $%.2f, %d sessions)", len(history), total, history[0].Sessions)
+	return fmt.Sprintf("local costs since 1st (last %d days: $%.2f, %d sessions)", len(history), total, sessions)
 }
 
-// fetchServerUsage tries the _server endpoint for overlay data.
+// fetchServerUsage tries the _server endpoint for overlay data. When no
+// cookie is cached it first tries to import one from the browser, so a
+// missing/expired cookie self-heals on the next refresh.
 func (p *Provider) fetchServerUsage(ctx context.Context) (*opencodeutil.ServerUsage, error) {
+	// The _server endpoint only accepts a browser session cookie; API keys
+	// are rejected there.
+	p.importCookieIfMissing()
+
 	if p.apiKey == "" && !p.haveCookie() {
 		return nil, errors.New("no auth available for server query")
 	}
@@ -282,6 +426,38 @@ func (p *Provider) fetchServerUsage(ctx context.Context) (*opencodeutil.ServerUs
 	}
 	workspaceID := opencodeutil.ResolveWorkspaceID(p.cfgWorkspaceOverride())
 	return client.FetchUsage(ctx, workspaceID)
+}
+
+// importCookieIfMissing imports the opencode.ai auth cookie from the
+// browser when the cache is empty. Bounded: a no-op whenever a cookie is
+// already cached.
+func (p *Provider) importCookieIfMissing() {
+	cc, err := opencodeutil.NewCookieCache()
+	if err != nil || cc.Cookie() != "" {
+		return
+	}
+	value, err := opencodeutil.ImportOpenCodeCookie()
+	if err != nil || value == "" {
+		return
+	}
+	_ = cc.Write(&opencodeutil.CacheCookie{Source: "browser-import", Cookie: value, CachedAt: time.Now()})
+}
+
+// clearCookieCache removes the cached cookie so the next refresh re-imports
+// from the browser (which may hold a fresh session).
+func (p *Provider) clearCookieCache() {
+	cc, err := opencodeutil.NewCookieCache()
+	if err != nil {
+		return
+	}
+	_ = cc.Write(&opencodeutil.CacheCookie{})
+}
+
+// serverErrNote returns the stale-cookie hint ("" when none), under mutex.
+func (p *Provider) serverErrNote() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastServerErr
 }
 
 // haveCookie checks if a cookie cache exists with a valid cookie.

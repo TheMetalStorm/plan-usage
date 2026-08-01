@@ -16,8 +16,11 @@ import (
 
 // Server function IDs (SHA-256 hashes published by opencode.ai).
 const (
-	FuncWorkspaces      = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
-	FuncSubscriptionGet = "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4"
+	FuncWorkspaces = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
+	// FuncSubscriptionGet is the OpenCode Go/Lite subscription query used by
+	// /workspace/:id/go. The Black subscription.get function returns null for
+	// Go plans even when the session is authenticated.
+	FuncSubscriptionGet = "c7389bd0e731f80f49593e5ee53835475f4e28594dd6bd83eb229bab753498cd"
 	serverBase          = "https://opencode.ai/_server"
 	serverOrigin        = "https://opencode.ai"
 	chromeUA            = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
@@ -30,7 +33,15 @@ type ServerUsage struct {
 	WeeklyPercent  float64
 	WeeklyReset    int64 // seconds
 	HasWeekly      bool
+	MonthlyPercent float64
+	MonthlyReset   int64 // seconds
+	HasMonthly     bool
 	UpdatedAt      time.Time
+}
+
+// AnyWindow reports whether at least one usage window was parsed.
+func (s *ServerUsage) AnyWindow() bool {
+	return s.RollingReset > 0 || s.WeeklyReset > 0 || s.MonthlyReset > 0
 }
 
 // ServerClient talks to the opencode.ai /_server RPC endpoint.
@@ -264,6 +275,8 @@ var (
 	rollingResetRx   = regexp.MustCompile(`rollingUsage[^}]*?resetInSec\s*:\s*([0-9]+)`)
 	weeklyPercentRx  = regexp.MustCompile(`weeklyUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)`)
 	weeklyResetRx    = regexp.MustCompile(`weeklyUsage[^}]*?resetInSec\s*:\s*([0-9]+)`)
+	monthlyPercentRx = regexp.MustCompile(`monthlyUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)`)
+	monthlyResetRx   = regexp.MustCompile(`monthlyUsage[^}]*?resetInSec\s*:\s*([0-9]+)`)
 )
 
 // parseWorkspaceIDs extracts workspace IDs from a JS object-literal response.
@@ -339,9 +352,10 @@ func extractFromDict(dict map[string]any, now time.Time) *ServerUsage {
 		return extractFromDict(usage, now)
 	}
 
-	// Try direct rollingUsage/weeklyUsage keys.
+	// Try direct rollingUsage/weeklyUsage/monthlyUsage keys.
 	rollingKeys := []string{"rollingUsage", "rolling", "rolling_usage", "rollingWindow", "rolling_window"}
 	weeklyKeys := []string{"weeklyUsage", "weekly", "weekly_usage", "weeklyWindow", "weekly_window"}
+	monthlyKeys := []string{"monthlyUsage", "monthly", "monthly_usage", "monthlyWindow", "monthly_window"}
 
 	var rollingDict map[string]any
 	for _, k := range rollingKeys {
@@ -357,33 +371,46 @@ func extractFromDict(dict map[string]any, now time.Time) *ServerUsage {
 			break
 		}
 	}
+	var monthlyDict map[string]any
+	for _, k := range monthlyKeys {
+		if d, ok := dict[k].(map[string]any); ok {
+			monthlyDict = d
+			break
+		}
+	}
 
-	if rollingDict == nil || weeklyDict == nil {
+	if rollingDict == nil && weeklyDict == nil && monthlyDict == nil {
 		return nil
 	}
 
-	return buildUsage(rollingDict, weeklyDict, now)
+	return buildUsage(rollingDict, weeklyDict, monthlyDict, now)
 }
 
-// buildUsage constructs ServerUsage from rolling and weekly sub-dicts.
-func buildUsage(rolling, weekly map[string]any, now time.Time) *ServerUsage {
-	rPct := extractPercent(rolling)
-	rReset := extractResetSec(rolling)
-	wPct := extractPercent(weekly)
-	wReset := extractResetSec(weekly)
+// buildUsage constructs ServerUsage from rolling, weekly and monthly
+// sub-dicts. Each window is optional: a window is included only when both
+// its usagePercent and resetInSec values are present.
+func buildUsage(rolling, weekly, monthly map[string]any, now time.Time) *ServerUsage {
+	usage := &ServerUsage{UpdatedAt: now}
 
-	if rPct == nil || rReset == nil || wPct == nil || wReset == nil {
+	if rPct, rReset := extractPercent(rolling), extractResetSec(rolling); rPct != nil && rReset != nil {
+		usage.RollingPercent = *rPct
+		usage.RollingReset = *rReset
+	}
+	if wPct, wReset := extractPercent(weekly), extractResetSec(weekly); wPct != nil && wReset != nil {
+		usage.WeeklyPercent = *wPct
+		usage.WeeklyReset = *wReset
+		usage.HasWeekly = true
+	}
+	if mPct, mReset := extractPercent(monthly), extractResetSec(monthly); mPct != nil && mReset != nil {
+		usage.MonthlyPercent = *mPct
+		usage.MonthlyReset = *mReset
+		usage.HasMonthly = true
+	}
+
+	if !usage.AnyWindow() {
 		return nil
 	}
-
-	return &ServerUsage{
-		RollingPercent: *rPct,
-		RollingReset:   *rReset,
-		WeeklyPercent:  *wPct,
-		WeeklyReset:    *wReset,
-		HasWeekly:      true,
-		UpdatedAt:      now,
-	}
+	return usage
 }
 
 // extractPercent extracts a usagePercent value from a map, trying multiple keys.
@@ -448,23 +475,31 @@ func parseSubscriptionRegex(text string, now time.Time) *ServerUsage {
 	rReset := extractRegexInt(rollingResetRx, text)
 	wPct := extractRegexFloat(weeklyPercentRx, text)
 	wReset := extractRegexInt(weeklyResetRx, text)
-
-	if rPct == nil || rReset == nil {
-		return nil
-	}
+	mPct := extractRegexFloat(monthlyPercentRx, text)
+	mReset := extractRegexInt(monthlyResetRx, text)
 
 	usage := &ServerUsage{
-		RollingPercent: *rPct,
-		RollingReset:   *rReset,
-		UpdatedAt:      now,
+		UpdatedAt: now,
 	}
 
+	if rPct != nil && rReset != nil {
+		usage.RollingPercent = *rPct
+		usage.RollingReset = *rReset
+	}
 	if wPct != nil && wReset != nil {
 		usage.WeeklyPercent = *wPct
 		usage.WeeklyReset = *wReset
 		usage.HasWeekly = true
 	}
+	if mPct != nil && mReset != nil {
+		usage.MonthlyPercent = *mPct
+		usage.MonthlyReset = *mReset
+		usage.HasMonthly = true
+	}
 
+	if !usage.AnyWindow() {
+		return nil
+	}
 	return usage
 }
 

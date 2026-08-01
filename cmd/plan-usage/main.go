@@ -9,6 +9,7 @@
 //
 //	plan-usage show              open the TUI dashboard
 //	plan-usage tray              run the native system-tray popup
+//	plan-usage opencode-cookie   store/clear the opencode.ai auth cookie
 //	plan-usage version           print version info
 package main
 
@@ -56,6 +57,9 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	case "init":
 		return runInitStatus(scanned.cmdArgs, stdout, stderr)
+
+	case "opencode-cookie":
+		return runCookieStatus(scanned.cmdArgs, os.Stdin, stdout, stderr)
 
 	case "version", "-v", "--version":
 		fmt.Fprintln(stdout, "plan-usage", version)
@@ -192,6 +196,8 @@ func usageTo(w io.Writer) {
 subcommands:
   show           open the interactive TUI dashboard
   tray           run the native system-tray popup
+  opencode-cookie
+                 store/clear the opencode.ai auth cookie for live Go usage
   version        print version and exit
 
 flags: --config PATH, --state-dir PATH, --debug, --dry-run
@@ -204,6 +210,14 @@ flags: --config PATH, --state-dir PATH, --debug, --dry-run
 // doesn't get printed twice by errInt).
 func runInitStatus(args []string, stdout, stderr io.Writer) int {
 	if err := runInit(args, stdout, stderr); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// runCookieStatus mirrors runInitStatus for the opencode-cookie subcommand.
+func runCookieStatus(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if err := runCookie(args, stdin, stdout, stderr); err != nil {
 		return 1
 	}
 	return 0

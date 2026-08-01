@@ -171,12 +171,57 @@ using `Daemon.Refresh(context.Context)` and atomically writes
 when started, so running `plan-usage tray` alongside `plan-usage show`
 gives you live data without a separate poller.
 
+## OpenCode Go live usage (server data)
+
+The OpenCode Go card shows three windows — 5h rolling, weekly, and monthly —
+which are **server-side** windows billed by opencode.ai. The most accurate
+numbers are the ones the opencode.ai console shows. `plan-usage` reads them
+from the opencode.ai `_server` endpoint, which only accepts a browser
+**session cookie** for `opencode.ai` (API keys are not accepted there).
+
+To enable live server data:
+
+1. Log in at <https://opencode.ai> in your browser (Chrome, Chromium,
+   Brave, Edge, Firefox, or Safari).
+2. Import the `auth` cookie with a single command (never share it — it is
+   a session secret):
+
+   ```bash
+   plan-usage opencode-cookie import
+   ```
+
+   This reads all common browser profiles directly from the browser's cookie
+   store (the tray/daemon also does this automatically whenever no cookie is
+   cached, so you only need to stay logged in at opencode.ai). If your browser
+   uses an encrypted or unusual cookie store, or you want to paste it in, use
+   one of:
+
+   ```bash
+   plan-usage opencode-cookie -                      # read the value from stdin
+   plan-usage opencode-cookie "<auth cookie value>"  # store it directly
+   ```
+
+`plan-usage opencode-cookie` prints the cache state (source and cache time,
+**never** the cookie value); `plan-usage opencode-cookie --clear` removes
+it.
+
+While the server data is fresh (fetched on each tray/TUI refresh and cached
+for up to 10 minutes), all three bars show the authoritative server
+percentages and reset times. If the cookie is missing or expired, the card
+falls back to **local estimates** computed from
+`$XDG_DATA_HOME/opencode/opencode.db` — labeled "local costs …" and
+counting only sessions started in `opencode` on this machine (sessions
+started through other agents, or on other devices, are not included). When
+a stored cookie goes stale, the card shows a "cookie expired" hint so you
+know to re-import (or log back in at opencode.ai).
+
 ## Commands
 
 | command | purpose |
 |---|---|
 | `plan-usage show` | Open the interactive TUI dashboard. |
 | `plan-usage tray` | Run the Linux/X11 native tray and GTK popup. |
+| `plan-usage opencode-cookie [import\|-\|<value>\|--clear]` | Store/clear/import the opencode.ai auth cookie for live OpenCode Go usage. |
 | `plan-usage version` | Print version information. |
 
 Global flags include `--config PATH`, `--state-dir PATH`, `--debug`, and
