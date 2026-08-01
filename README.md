@@ -76,6 +76,53 @@ is passed as nil). Keep using `GOFLAGS=-mod=vendor` for reproducible builds; a
 future gotk3 upgrade should remove the workaround only after the upstream release
 builds cleanly.
 
+## Which executable should start the tray?
+
+There are two different launchers in a setup that uses Surfshark:
+
+- **`plan-usage`** is the project binary built from `./cmd/plan-usage`. Use it
+  directly for normal operation:
+  `plan-usage show`, `plan-usage tray`, or `plan-usage init tray`.
+- **`plan-usage-after-vpn`** is an optional shell wrapper in
+  `scripts/plan-usage-after-vpn`. It is not part of the Go binary and is not
+  installed automatically. In an i3 setup it starts the configured Flatpak VPN,
+  waits for successful HTTPS traffic through the recognized VPN interface, and
+  then runs `plan-usage tray`.
+
+Install the optional wrapper and its example configuration like this:
+
+```bash
+install -Dm755 scripts/plan-usage-after-vpn ~/.local/bin/plan-usage-after-vpn
+mkdir -p ~/.config/plan-usage
+if test ! -e ~/.config/plan-usage/vpn.env; then
+  install -m 600 scripts/plan-usage-after-vpn.env.example ~/.config/plan-usage/vpn.env
+fi
+```
+
+The wrapper reads `~/.config/plan-usage/vpn.env`. Configure
+`PLAN_USAGE_VPN_APP`, `PLAN_USAGE_VPN_APP_ARGS`,
+`PLAN_USAGE_VPN_INTERFACE_REGEX`, `PLAN_USAGE_VPN_HEALTH_URL`,
+`PLAN_USAGE_VPN_TIMEOUT`, `PLAN_USAGE_VPN_TRAY_PROCESSES`, and `PLAN_USAGE_BIN`
+there. The defaults target Surfshark's Flatpak and the Codebuff HTTPS host;
+the health URL must remain HTTPS. Set `PLAN_USAGE_VPN_TRAY_PROCESSES` to an
+empty value when no panel-process readiness check is needed.
+
+Use the direct binary when the VPN is not required for the provider checks:
+
+```i3
+exec --no-startup-id "$HOME/.local/bin/plan-usage" tray
+```
+
+Use the local wrapper only when the tray must wait for Surfshark:
+
+```i3
+exec --no-startup-id "$HOME/.local/bin/plan-usage-after-vpn"
+```
+
+These are alternatives. Do not configure both, or the tray may start twice.
+The wrapper is currently specific to a Linux + i3 + Surfshark Flatpak setup and
+is therefore documented as local integration rather than application behavior.
+
 ## Tray startup and operation
 
 Run the tray from a terminal **inside an X11 graphical login session**:
@@ -101,7 +148,8 @@ plan-usage init tray > ~/.config/autostart/plan-usage-tray.desktop
 
 The generated entry uses `Terminal=false`. `init tray` emits the Linux desktop
 entry; macOS and other platform launchers are intentionally not supported for
-this GTK popup.
+this GTK popup. If the optional `plan-usage-after-vpn` i3 wrapper is enabled,
+do not also enable this desktop entry; choose one tray startup path.
 
 **Wayland and Sway are not supported yet.** If `WAYLAND_DISPLAY` is active,
 or the GTK backend is not X11, `plan-usage tray` exits with a clear error

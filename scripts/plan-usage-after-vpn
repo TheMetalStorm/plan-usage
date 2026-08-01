@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Start the configured VPN and launch plan-usage only after the VPN can carry
+# a successful HTTPS request through its recognized interface.
+#
+# Configuration is an optional shell-style env file at:
+#   ${XDG_CONFIG_HOME:-$HOME/.config}/plan-usage/vpn.env
+# Copy scripts/plan-usage-after-vpn.env.example there to customize the
+# defaults. Environment variables may also be supplied directly.
+
+set -u
+
+readonly CONFIG_FILE="${PLAN_USAGE_VPN_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/plan-usage/vpn.env}"
+if [[ -f "$CONFIG_FILE" ]]; then
+    # The config is a user-owned shell fragment containing variable assignments.
+    # shellcheck disable=SC1090
+    if ! . "$CONFIG_FILE"; then
+        printf 'ERROR: could not load VPN config %s; plan-usage will not be started.\n' "$CONFIG_FILE"
+        exit 1
+    fi
+fi
+
+readonly LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/plan-usage-vpn-start.log"
+readonly TIMEOUT_SECONDS="${PLAN_USAGE_VPN_TIMEOUT:-180}"
+readonly POLL_SECONDS="${PLAN_USAGE_VPN_POLL_SECONDS:-2}"
+readonly STATUS_INTERVAL_SECONDS="${PLAN_USAGE_VPN_STATUS_INTERVAL_SECONDS:-10}"
+readonly VPN_APP="${PLAN_USAGE_VPN_APP-com.surfshark.Surfshark}"
+readonly VPN_APP_ARGS="${PLAN_USAGE_VPN_APP_ARGS---background}"
+readonly VPN_INTERFACE_REGEX="${PLAN_USAGE_VPN_INTERFACE_REGEX-^(surfshark(_wg)?|wg[-_]surfshark)$}"
+readonly VPN_HEALTH_URL="${PLAN_USAGE_VPN_HEALTH_URL-https://www.codebuff.com/}"
+readonly TRAY_PROCESSES="${PLAN_USAGE_VPN_TRAY_PROCESSES-snixembed polybar}"
+readonly PLAN_USAGE="${PLAN_USAGE_BIN-$HOME/.local/bin/plan-usage}"
+
+if ! [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'ERROR: PLAN_USAGE_VPN_TIMEOUT must be a positive integer (got %q).\n' "$TIMEOUT_SECONDS"
+    exit 1
+fi
+if ! [[ "$POLL_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'ERROR: PLAN_USAGE_VPN_POLL_SECONDS must be a positive integer (got %q).\n' "$POLL_SECONDS"
+    exit 1
+fi
+if ! [[ "$STATUS_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'ERROR: PLAN_USAGE_VPN_STATUS_INTERVAL_SECONDS must be a positive integer (got %q).\n' "$STATUS_INTERVAL_SECONDS"
+    exit 1
+fi
+if [[ -z "$VPN_APP" ]]; then
+    echo "ERROR: PLAN_USAGE_VPN_APP must not be empty; plan-usage will not be started."
+    exit 1
+fi
+if [[ -z "$VPN_INTERFACE_REGEX" ]]; then
+    echo "ERROR: PLAN_USAGE_VPN_INTERFACE_REGEX must not be empty; plan-usage will not be started."
+    exit 1
+fi
+case "$VPN_HEALTH_URL" in
+    https://*) ;;
+    *)
+        echo "ERROR: PLAN_USAGE_VPN_HEALTH_URL must use https://; plan-usage will not be started."
+        exit 1
+        ;;
+esac
+if ! [[ "$VPN_HEALTH_URL" =~ ^https://[^[:space:]]+$ ]]; then
+    echo "ERROR: PLAN_USAGE_VPN_HEALTH_URL is not a valid HTTPS URL; plan-usage will not be started."
+    exit 1
+fi
+
+readonly SURFSHARK_LOG_DIR="$HOME/.var/app/com.surfshark.Surfshark/config/Surfshark/logs"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+exec >>"$LOG_FILE" 2>&1
+printf '\n[%s] plan-usage VPN start helper started\n' "$(date --iso-8601=seconds)"
+
+# Prevent duplicate launches when i3 reloads its configuration.
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"${XDG_RUNTIME_DIR:-/tmp}/plan-usage-after-vpn.lock"
+    if ! flock -n 9; then
+        echo "Another VPN start helper is already running; exiting."
+        exit 0
+    fi
+fi
+
+if ! command -v flatpak >/dev/null 2>&1; then
+    echo "ERROR: flatpak is not installed; plan-usage will not be started."
+    exit 1
+fi
+if ! command -v ip >/dev/null 2>&1; then
+    echo "ERROR: ip command is not available; plan-usage will not be started."
+    exit 1
+fi
+if ! command -v curl >/dev/null 2>&1; then
+    echo "ERROR: curl is not available; cannot verify routed VPN HTTPS safely."
+    echo "Install curl, then reload i3."
+    exit 1
+fi
+
+# The configured app is expected to be a Flatpak VPN app. Keep arguments as a
+# whitespace-separated list so the default --background remains overridable.
+vpn_app_args=()
+if [[ -n "$VPN_APP_ARGS" ]]; then
+    read -r -a vpn_app_args <<< "$VPN_APP_ARGS"
+fi
+
+# The GUI is idempotent for normal Flatpak single-instance startup. Start it
+# here so this helper owns the ordering instead of relying on i3 exec order.
+flatpak run "$VPN_APP" "${vpn_app_args[@]}" </dev/null >/dev/null 2>&1 &
+vpn_pid=$!
+echo "VPN app startup requested: ${VPN_APP} (pid ${vpn_pid})."
+
+# A Flatpak launch normally remains attached to the desktop app. If it exits
+# immediately, report the failure; otherwise the readiness loop below owns the
+# actual connection check and timeout.
+sleep 1
+if ! kill -0 "$vpn_pid" 2>/dev/null; then
+    echo "WARNING: VPN app launcher exited; continuing to check for an already-running tunnel."
+fi
+
+find_vpn_iface() {
+    ip -o link show 2>/dev/null \
+        | awk -F': ' '{print $2}' \
+        | sed 's/@.*//' \
+        | grep -E "$VPN_INTERFACE_REGEX" \
+        | head -n1 || true
+}
+
+vpn_ready() {
+    local iface
+    iface="$(find_vpn_iface)"
+    [ -n "$iface" ] || return 1
+
+    # An address proves that the tunnel has been configured, not merely that a
+    # stale/empty WireGuard device exists.
+    ip -4 addr show dev "$iface" scope global 2>/dev/null | grep -q 'inet ' || return 1
+
+    # wg(8) requires network-admin privileges on some systems, so a user-level
+    # i3 autostart cannot reliably inspect the handshake. Require a successful
+    # HTTPS request bound to the VPN interface instead. This proves that the
+    # configured tunnel can actually carry traffic and remains fail-closed if
+    # the interface is stale or disconnected.
+    curl --fail --silent --show-error --location \
+        --proto '=https' --proto-redir '=https' \
+        --interface "$iface" --connect-timeout 10 --max-time 15 \
+        --output /dev/null "$VPN_HEALTH_URL" || return 1
+
+    printf 'VPN tunnel ready on %s (HTTPS health check passed via %s)\n' "$iface" "$VPN_HEALTH_URL"
+    return 0
+}
+
+start_time="$(date +%s)"
+last_status=0
+while :; do
+    if vpn_ready; then
+        break
+    fi
+    now="$(date +%s)"
+    elapsed=$((now - start_time))
+    if [ "$elapsed" -ge "$TIMEOUT_SECONDS" ]; then
+        echo "ERROR: VPN tunnel was not ready after ${TIMEOUT_SECONDS}s; plan-usage will not be started."
+        if [[ "$VPN_APP" == com.surfshark.Surfshark ]]; then
+            echo "Check Surfshark's own log for connection errors: $SURFSHARK_LOG_DIR"
+        fi
+        exit 1
+    fi
+    if [ "$((elapsed - last_status))" -ge "$STATUS_INTERVAL_SECONDS" ]; then
+        iface="$(find_vpn_iface)"
+        if [ -n "$iface" ]; then
+            echo "Waiting for VPN HTTPS health on $iface (${elapsed}s/${TIMEOUT_SECONDS}s)."
+        else
+            echo "Waiting for VPN tunnel (${elapsed}s/${TIMEOUT_SECONDS}s); no matching interface yet."
+        fi
+        last_status="$elapsed"
+    fi
+    sleep "$POLL_SECONDS"
+done
+
+tray_ready() {
+    local process
+    local -a processes=()
+
+    # An empty value explicitly disables the desktop-panel readiness guard.
+    [[ -n "${TRAY_PROCESSES//[[:space:]]/}" ]] || return 0
+    read -r -a processes <<< "$TRAY_PROCESSES"
+    for process in "${processes[@]}"; do
+        pgrep -x "$process" >/dev/null 2>&1 || return 1
+    done
+    return 0
+}
+
+# Keep the existing tray readiness guard, but make it configurable for desktop
+# setups that do not use both snixembed and polybar.
+tray_start="$(date +%s)"
+while ! tray_ready; do
+    now="$(date +%s)"
+    elapsed=$((now - tray_start))
+    if [ "$elapsed" -ge "$TIMEOUT_SECONDS" ]; then
+        echo "ERROR: configured tray processes were not ready after ${TIMEOUT_SECONDS}s; plan-usage will not be started."
+        echo "Configured PLAN_USAGE_VPN_TRAY_PROCESSES=${TRAY_PROCESSES@Q}"
+        exit 1
+    fi
+    sleep "$POLL_SECONDS"
+done
+
+if pgrep -af -- "$PLAN_USAGE tray" >/dev/null 2>&1; then
+    echo "plan-usage tray is already running; nothing to start."
+    exit 0
+fi
+
+echo "Starting plan-usage tray after confirmed VPN connection."
+exec "$PLAN_USAGE" tray
