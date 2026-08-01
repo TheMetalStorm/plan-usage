@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,12 @@ type Config struct {
 	StateDir       string                    `yaml:"state_dir"`
 	Debug          bool                      `yaml:"debug"`
 	DryRun         bool                      `yaml:"dry_run"`
+
+	// mu guards the runtime-mutable fields (Enabled, Providers, scalar
+	// settings) against concurrent readers -- daemon refresh goroutines and
+	// the TUI/tray toggle handlers -- while a provider visibility toggle
+	// rewrites the allowlist. It is unexported so yaml never serialises it.
+	mu sync.RWMutex
 }
 
 // ProviderConfig holds per-provider overrides.
@@ -59,6 +66,8 @@ func (c *Config) Defaults() {
 
 // IsProviderEnabled reports whether the named provider should be queried.
 func (c *Config) IsProviderEnabled(name string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if len(c.Enabled) > 0 {
 		for _, n := range c.Enabled {
 			if n == name {
@@ -71,6 +80,97 @@ func (c *Config) IsProviderEnabled(name string) bool {
 		return !pc.Disabled
 	}
 	return true // default-on
+}
+
+// EnabledSet returns the set of provider names currently enabled, following
+// the same semantics as IsProviderEnabled. allNames is the stable provider
+// registry order; when the allowlist is empty (default-on) the set is
+// materialized from allNames minus any provider with Disabled set.
+func (c *Config) EnabledSet(allNames []string) map[string]bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.enabledSetLocked(allNames)
+}
+
+// enabledSetLocked implements EnabledSet; the caller must hold at least
+// the read lock.
+func (c *Config) enabledSetLocked(allNames []string) map[string]bool {
+	set := make(map[string]bool, len(allNames))
+	if len(c.Enabled) > 0 {
+		for _, n := range c.Enabled {
+			set[n] = true
+		}
+		return set
+	}
+	for _, n := range allNames {
+		set[n] = true
+	}
+	for n, pc := range c.Providers {
+		if pc.Disabled {
+			delete(set, n)
+		}
+	}
+	return set
+}
+
+// SetProviderEnabled updates the enabled allowlist so that name is included
+// or excluded, then persists the config. allNames is the stable provider
+// registry order; when the allowlist was empty (default-on) it is
+// materialized so an exclusion is actually recorded on disk. The write
+// happens under the config lock so concurrent refresh readers never observe
+// a partially-updated allowlist.
+func (c *Config) SetProviderEnabled(allNames []string, name string, enabled bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	set := c.enabledSetLocked(allNames)
+	if enabled {
+		set[name] = true
+	} else {
+		delete(set, name)
+	}
+	c.Enabled = orderedEnabled(allNames, c.Enabled, set)
+	if c.ConfigPath == "" {
+		home, _ := os.UserHomeDir()
+		c.ConfigPath = filepath.Join(home, DefaultPath)
+	}
+	return c.writePathLocked(c.ConfigPath)
+}
+
+// orderedEnabled returns the enabled names in registry order, followed by
+// any pre-existing allowlist entries that are still enabled but not part of
+// the registry (kept so a toggle never silently drops user data).
+func orderedEnabled(allNames, previous []string, set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	seen := make(map[string]bool, len(set))
+	for _, n := range allNames {
+		if set[n] && !seen[n] {
+			out = append(out, n)
+			seen[n] = true
+		}
+	}
+	for _, n := range previous {
+		if set[n] && !seen[n] {
+			out = append(out, n)
+			seen[n] = true
+		}
+	}
+	return out
+}
+
+// ApplyFresh merges runtime-mutable settings from a freshly loaded config
+// into c under the config lock. Long-running processes (the tray) use it to
+// pick up provider-visibility changes made by another process (e.g. the TUI)
+// without restarting.
+func (c *Config) ApplyFresh(fresh *Config) {
+	if fresh == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Enabled = append([]string(nil), fresh.Enabled...)
+	if fresh.RefreshEvery >= 5*time.Second {
+		c.RefreshEvery = fresh.RefreshEvery
+	}
 }
 
 // Override returns a Credential if the user supplied one explicitly,
@@ -112,10 +212,17 @@ func Load(path string) (*Config, error) {
 
 // Write serialises the config to disk.
 func (c *Config) Write(path string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if path == "" {
 		home, _ := os.UserHomeDir()
 		path = filepath.Join(home, DefaultPath)
 	}
+	return c.writePathLocked(path)
+}
+
+// writePathLocked serialises the config to path; the caller must hold mu.
+func (c *Config) writePathLocked(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
